@@ -77,7 +77,7 @@ sync(host, scope):
   last complete line, with a warning. The tool never stops or kills a session;
   it reports the pid, name and tmux pane so you can close it.
 - **Divergence** is resolved by merging the tails automatically, keeping both
-  originals as `<name>.conflict-<host>-<ts>` (`/resume` ignores them), provided
+  originals as `<name>.conflict-<host>-<hash8>` (`/resume` ignores them; named by content, so a persisting conflict is saved once), provided
   the milestone 4 test shows `--resume` handles merged transcripts. Until then,
   write a conflict copy and wait for `resolve <uuid> --keep local|remote|merge`.
 - **`history.jsonl`** is merged on every sync: union, sorted by `timestamp`,
@@ -91,7 +91,7 @@ sync(host, scope):
 ## Milestones
 
 1. [x] Dry run: manifests, live check, prefix classification, plan output.
-2. [ ] Execute: rsync fast-forwards and new files; conflict copies; locking;
+2. [x] Execute: rsync fast-forwards and new files; conflict copies; locking;
        idle-source snapshots; exclude `sessions-index.json`; version warning.
 3. [ ] Sync base state file; three-way for mutable files; deletions and trash;
        `history.jsonl` merge; `--config`.

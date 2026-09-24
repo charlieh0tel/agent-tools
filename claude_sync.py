@@ -6,17 +6,22 @@ The same file runs on both ends: locally as the CLI, and on the remote host as
 has to be installed on the other machine.
 """
 import argparse
+import fcntl
 import hashlib
 import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-CACHE = Path.home() / ".cache" / "claude-sync" / "hash-cache.json"
+CACHE = Path(os.environ.get("CLAUDE_SYNC_CACHE", Path.home() / ".cache" / "claude-sync" / "hash-cache.json"))
+LOCK_NAME = ".claude-sync.lock"
+INCOMING = ".claude-sync-incoming"
+EXCLUDE = {"sessions-index.json"}
 
 
 def claude_dir() -> Path:
@@ -65,6 +70,14 @@ def file_hash(path: Path, limit: int | None = None) -> str:
     return h.hexdigest()
 
 
+def ends_with_newline(path: Path, size: int) -> bool:
+    if size == 0:
+        return True
+    with open(path, "rb") as f:
+        f.seek(size - 1)
+        return f.read(1) == b"\n"
+
+
 def load_cache() -> dict:
     try:
         return json.loads(CACHE.read_text())
@@ -97,9 +110,9 @@ def manifest(project: str | None) -> dict:
             continue
         for dirpath, _, names in os.walk(base):
             for name in names:
-                p = Path(dirpath) / name
-                if ".conflict-" in name:
+                if ".conflict-" in name or name in EXCLUDE:
                     continue
+                p = Path(dirpath) / name
                 st = p.stat()
                 rel = str(p.relative_to(root))
                 key = str(p)
@@ -109,7 +122,10 @@ def manifest(project: str | None) -> dict:
                 else:
                     digest = file_hash(p)
                     cache[key] = [st.st_size, st.st_mtime_ns, digest]
-                out[rel] = {"size": st.st_size, "mtime": st.st_mtime_ns, "hash": digest}
+                entry = {"size": st.st_size, "mtime": st.st_mtime_ns, "hash": digest}
+                if kind_of(rel) == "append":
+                    entry["complete"] = ends_with_newline(p, st.st_size)
+                out[rel] = entry
     save_cache(cache)
     return out
 
@@ -135,36 +151,74 @@ def live_sessions() -> dict:
     return live
 
 
+def claude_version() -> str | None:
+    exe = shutil.which("claude") or str(Path.home() / ".local" / "bin" / "claude")
+    try:
+        r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.split()[0] if r.returncode == 0 and r.stdout else None
+
+
 def prefix_hashes(requests: list) -> dict:
     root = claude_dir()
     return {rel: file_hash(root / rel, n) for rel, n in requests}
 
 
 def scan(project: str | None) -> dict:
-    return {"manifest": manifest(project), "live": live_sessions()}
+    return {"manifest": manifest(project), "live": live_sessions(), "version": claude_version()}
 
 
 # ------------------------------------------------------------------- remote
 
 class Remote:
     def __init__(self, host: str, remote_dir: str | None):
+        if host == "@local" and not remote_dir:
+            sys.exit("claude-sync: @local needs --remote-dir")
         self.host = host
         self.remote_dir = remote_dir
         self.script = Path(__file__).read_bytes()
+        self.lock_proc = None
+
+    def _argv(self, command: str) -> list[str]:
+        if self.host == "@local":  # test hook: run the "remote" side as a local subprocess
+            return ["sh", "-c", command]
+        return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", self.host, command]
 
     def call(self, op: str, arg) -> dict:
         cmd = ["python3", "-", "--remote", op, json.dumps(arg)]
         if self.remote_dir:
             cmd = ["env", f"CLAUDE_SYNC_DIR={self.remote_dir}"] + cmd
-        if self.host == "@local":  # test hook: run the "remote" side as a local subprocess
-            argv = ["sh", "-c", shlex.join(cmd)]
-        else:
-            argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", self.host, shlex.join(cmd)]
-        r = subprocess.run(argv, input=self.script, capture_output=True)
+        r = subprocess.run(self._argv(shlex.join(cmd)), input=self.script, capture_output=True)
         if r.returncode != 0:
             err = r.stderr.decode(errors="replace").strip()
             sys.exit(f"claude-sync: {self.host}: {op} failed (exit {r.returncode}): {err}")
         return json.loads(r.stdout)
+
+    def rsync_root(self) -> str:
+        """The remote ~/.claude as an rsync endpoint, with a trailing slash."""
+        root = (self.remote_dir or ".claude").rstrip("/") + "/"
+        return root if self.host == "@local" else f"{self.host}:{root}"
+
+    def lock(self) -> None:
+        """Hold flock(1) on the remote lock file until this process exits.
+
+        `python3 -` reads the script to EOF before running it, so the lock can't
+        be held by this script; flock + cat keeps it until our end of stdin closes.
+        """
+        path = shlex.quote(f"{self.remote_dir}/{LOCK_NAME}") if self.remote_dir \
+            else f'"$HOME/.claude/{LOCK_NAME}"'
+        command = f"flock -n {path} -c 'echo locked; exec cat >/dev/null'"
+        self.lock_proc = subprocess.Popen(self._argv(command), stdin=subprocess.PIPE,
+                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if self.lock_proc.stdout.readline().strip() != b"locked":
+            err = self.lock_proc.stderr.read().decode(errors="replace").strip()
+            sys.exit(f"claude-sync: {self.host}: another sync is running there {err}".rstrip())
+
+    def unlock(self) -> None:
+        if self.lock_proc:
+            self.lock_proc.stdin.close()
+            self.lock_proc.wait()
 
 
 def remote_main(op: str, arg: str) -> None:
@@ -178,42 +232,86 @@ def remote_main(op: str, arg: str) -> None:
     json.dump(result, sys.stdout)
 
 
+def lock_local():
+    f = open(claude_dir() / LOCK_NAME, "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit("claude-sync: another sync is running on this machine")
+    return f  # the lock lasts as long as the file stays open
+
+
 # --------------------------------------------------------------------- plan
 
-def classify(local: dict, remote_: dict, live: set, remote: Remote) -> list[tuple]:
-    """Return (action, rel, detail) for every path on either side."""
+def classify(local: dict, remote_: dict, remote: Remote) -> list[list]:
+    """Return [action, rel, detail] for every path on either side, ignoring liveness."""
     plan = []
     need_prefix = []  # append-only files where the remote copy is longer
     for rel in sorted(local.keys() | remote_.keys()):
         L, R = local.get(rel), remote_.get(rel)
-        sid = session_of(rel)
-        if sid in live:
-            plan.append(("live", rel, sid))
-        elif R is None:
-            plan.append(("push", rel, "new"))
+        if R is None:
+            plan.append(["push", rel, "new"])
         elif L is None:
-            plan.append(("pull", rel, "new"))
+            plan.append(["pull", rel, "new"])
         elif L["hash"] == R["hash"]:
-            plan.append(("same", rel, ""))
+            plan.append(["same", rel, ""])
         elif kind_of(rel) == "append":
             if L["size"] > R["size"]:
                 ok = file_hash(claude_dir() / rel, R["size"]) == R["hash"]
-                plan.append(("push", rel, "fast-forward") if ok else ("conflict", rel, "diverged"))
+                plan.append(["push", rel, "fast-forward"] if ok else ["conflict", rel, "diverged"])
             elif L["size"] < R["size"]:
                 need_prefix.append((rel, L["size"]))
             else:
-                plan.append(("conflict", rel, "diverged"))
+                plan.append(["conflict", rel, "diverged"])
         elif kind_of(rel) == "once":
-            plan.append(("conflict", rel, "write-once file differs"))
+            plan.append(["conflict", rel, "write-once file differs"])
         else:
-            plan.append(("conflict", rel, "mutable, both differ (no sync base yet)"))
+            plan.append(["conflict", rel, "both changed (no sync base yet)"])
 
     if need_prefix:
         remote_prefix = remote.call("prefix", need_prefix)
         for rel, _ in need_prefix:
             ok = remote_prefix[rel] == local[rel]["hash"]
-            plan.append(("pull", rel, "fast-forward") if ok else ("conflict", rel, "diverged"))
+            plan.append(["pull", rel, "fast-forward"] if ok else ["conflict", rel, "diverged"])
+    plan.sort(key=lambda p: p[1])
     return plan
+
+
+def apply_live(plan: list, local: dict, remote_: dict, live: dict, host: str) -> dict:
+    """Turn actions that would touch a running session into skips.
+
+    live maps side ("local" or host) -> {sessionId: info}. Returns
+    {sessionId: (side, info)} for idle sessions that are being copied from.
+    """
+    snapshots = {}
+    for item in plan:
+        action, rel, _ = item
+        sid = session_of(rel)
+        if action == "same" or sid is None:
+            continue
+        if action == "conflict":
+            for side in ("local", host):
+                if sid in live[side]:
+                    item[0], item[2] = "skip", f"diverged, but open on {side}"
+            continue
+        src, dst = ("local", host) if action == "push" else (host, "local")
+        src_entry = (local if action == "push" else remote_)[rel]
+        if sid in live[dst]:
+            item[0], item[2] = "skip", f"open on {dst}"
+        elif sid in live[src]:
+            info = live[src][sid]
+            if info.get("status") != "idle":
+                item[0], item[2] = "skip", f"busy on {src}"
+            elif not src_entry.get("complete", True):
+                item[0], item[2] = "skip", f"partial last line on {src}"
+            else:
+                snapshots[sid] = (src, info)
+    return snapshots
+
+
+def conflict_name(rel: str, host: str, entry: dict) -> str:
+    # Keyed by content, so a conflict that persists is saved once, not on every sync.
+    return f"{rel}.conflict-{host}-{entry['hash'][:8]}"
 
 
 def human(n: int) -> str:
@@ -223,31 +321,76 @@ def human(n: int) -> str:
         n /= 1024
 
 
-def print_plan(plan: list, local: dict, remote_: dict, live_info: dict, host: str) -> None:
-    counts = {}
-    for action, *_ in plan:
-        counts[action] = counts.get(action, 0) + 1
-    if "live" in counts:
-        counts["live"] = f"{len({p[2] for p in plan if p[0] == 'live'})} sessions"
+def describe(info: dict) -> str:
+    return (f"pid {info['pid']}, {info.get('status')}, tmux {info.get('tmux') or '-'}, "
+            f"name {info.get('name') or '-'}")
 
-    for sid in sorted({p[2] for p in plan if p[0] == "live"}):
-        side, info = live_info[sid]
-        print(f"skip  {sid[:8]}  running on {side}: pid {info['pid']}, {info['status']}, "
-              f"tmux {info.get('tmux') or '-'}, name {info.get('name') or '-'}")
+
+def print_plan(plan: list, local: dict, remote_: dict, live: dict, snapshots: dict, host: str) -> None:
+    skipped = {}
+    for action, rel, detail in plan:
+        if action == "skip":
+            skipped.setdefault((session_of(rel), detail), 0)
+            skipped[(session_of(rel), detail)] += 1
+    for (sid, why), n in sorted(skipped.items()):
+        side = why.rsplit(" on ", 1)[-1]
+        info = live[side].get(sid)
+        print(f"skip      {sid[:8]}  {why} ({describe(info) if info else f'{n} files'})")
+    for sid, (side, info) in sorted(snapshots.items()):
+        print(f"warn      {sid[:8]}  copying a snapshot; still open on {side} ({describe(info)})")
 
     for action, rel, detail in plan:
-        if action in ("same", "live"):
+        if action in ("same", "skip"):
             continue
-        if action in ("push", "pull") and detail == "fast-forward":
-            L, R = local[rel], remote_[rel]
-            detail += f" +{human(abs(L['size'] - R['size']))}"
-        elif action in ("push", "pull"):
+        if detail == "fast-forward":
+            detail += f" +{human(abs(local[rel]['size'] - remote_[rel]['size']))}"
+        elif detail == "new":
             detail += f" {human((local.get(rel) or remote_.get(rel))['size'])}"
         arrow = {"push": f"-> {host}", "pull": f"<- {host}", "conflict": "!!"}[action]
         print(f"{action:8}  {arrow:14}  {rel}  ({detail})")
 
-    summary = ", ".join(f"{counts[a]} {a}" for a in ("push", "pull", "conflict", "live", "same") if a in counts)
+    counts = {}
+    for action, *_ in plan:
+        counts[action] = counts.get(action, 0) + 1
+    if "skip" in counts:
+        counts["skip"] = f"{len({s for s, _ in skipped})} sessions"
+    summary = ", ".join(f"{counts[a]} {a}" for a in ("push", "pull", "conflict", "skip", "same") if a in counts)
     print(f"\n{summary or 'nothing to do'}")
+
+
+# ------------------------------------------------------------------ execute
+
+def rsync(src: str, dst: str, paths: list[str]) -> None:
+    if not paths:
+        return
+    r = subprocess.run(["rsync", "-a", "--files-from=-", "--from0", src, dst],
+                       input="\0".join(paths).encode())
+    if r.returncode != 0:
+        sys.exit(f"claude-sync: rsync {src} -> {dst} failed (exit {r.returncode})")
+
+
+def execute(plan: list, remote_: dict, remote: Remote) -> None:
+    root = claude_dir()
+    local_root = f"{root}/"
+    push = [rel for action, rel, _ in plan if action == "push"]
+    pull = [rel for action, rel, _ in plan if action == "pull"]
+    conflicts = [rel for action, rel, _ in plan if action == "conflict"
+                 and not (root / conflict_name(rel, remote.host, remote_[rel])).exists()]
+
+    rsync(local_root, remote.rsync_root(), push)
+    rsync(remote.rsync_root(), local_root, pull)
+
+    # Conflict copies: fetch the remote version into a staging dir on the same
+    # filesystem, then move each next to the local file under its conflict name.
+    if conflicts:
+        staging = root / INCOMING
+        shutil.rmtree(staging, ignore_errors=True)
+        rsync(remote.rsync_root(), f"{staging}/", conflicts)
+        for rel in conflicts:
+            os.replace(staging / rel, root / conflict_name(rel, remote.host, remote_[rel]))
+        shutil.rmtree(staging)
+
+    print(f"done: pushed {len(push)}, pulled {len(pull)}, saved {len(conflicts)} conflict copies")
 
 
 # ---------------------------------------------------------------------- cli
@@ -256,19 +399,29 @@ def cmd_sync(args) -> None:
     project = None if args.all else encode(os.path.abspath(args.project))
     remote = Remote(args.host, args.remote_dir)
 
+    if not args.dry_run:
+        local_lock = lock_local()
+        remote.lock()
+
     local_scan = scan(project)
     remote_scan = remote.call("scan", project)
-    if project and not local_scan["manifest"] and not remote_scan["manifest"]:
+    local, remote_ = local_scan["manifest"], remote_scan["manifest"]
+    if project and not local and not remote_:
         sys.exit(f"claude-sync: no sessions for {args.project} on either side")
 
-    live_info = {sid: ("local", i) for sid, i in local_scan["live"].items()}
-    live_info.update({sid: (args.host, i) for sid, i in remote_scan["live"].items()})
+    lv, rv = local_scan["version"], remote_scan["version"]
+    if lv != rv:
+        print(f"warn      Claude Code versions differ: local {lv or '?'}, {args.host} {rv or '?'}")
 
-    plan = classify(local_scan["manifest"], remote_scan["manifest"], live_info.keys(), remote)
-    print_plan(plan, local_scan["manifest"], remote_scan["manifest"], live_info, args.host)
+    live = {"local": local_scan["live"], args.host: remote_scan["live"]}
+    plan = classify(local, remote_, remote)
+    snapshots = apply_live(plan, local, remote_, live, args.host)
+    print_plan(plan, local, remote_, live, snapshots, args.host)
 
     if not args.dry_run:
-        sys.exit("\nclaude-sync: only --dry-run is implemented so far")
+        execute(plan, remote_, remote)
+        remote.unlock()
+        local_lock.close()
 
 
 def main() -> None:
