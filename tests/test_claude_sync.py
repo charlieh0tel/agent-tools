@@ -1,6 +1,7 @@
 """End-to-end tests: two scratch ~/.claude dirs synced through the @local test host."""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -45,13 +46,16 @@ class SyncTest(unittest.TestCase):
         (side / "sessions" / f"{pid}.json").write_text(json.dumps(
             {"pid": pid, "sessionId": uuid, "procStart": proc_start(pid), "status": status}))
 
-    def sync(self, *extra: str) -> str:
+    def sync(self, *extra: str, ok: bool = True) -> str:
         r = subprocess.run(
             [sys.executable, str(SCRIPT), "sync", "@local", "--project", PROJECT_DIR,
              "--remote-dir", str(self.remote), *extra],
             env=self.env, capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
-        return r.stdout
+        if ok:
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        else:
+            self.assertNotEqual(r.returncode, 0, r.stdout)
+        return r.stdout + r.stderr
 
     def read(self, side: Path, rel: str) -> str:
         return (side / rel).read_text()
@@ -129,10 +133,12 @@ class SyncTest(unittest.TestCase):
 
     def test_concurrent_sync_is_refused(self):
         self.write(self.local, self.transcript(U1), "a\n")
-        holder = subprocess.Popen(["flock", str(self.remote / ".claude-sync.lock"), "sleep", "30"])
+        lock = self.remote / "claude-sync" / "lock"
+        lock.parent.mkdir()
+        holder = subprocess.Popen(["flock", str(lock), "sleep", "30"])
         try:
             for _ in range(50):  # wait until flock holds the lock
-                if subprocess.run(["flock", "-n", str(self.remote / ".claude-sync.lock"), "true"]).returncode:
+                if subprocess.run(["flock", "-n", str(lock), "true"]).returncode:
                     break
             r = subprocess.run(
                 [sys.executable, str(SCRIPT), "sync", "@local", "--project", PROJECT_DIR,
@@ -142,6 +148,130 @@ class SyncTest(unittest.TestCase):
         finally:
             holder.kill()
             holder.wait()
+
+
+    # ------------------------------------------------ milestone 3: sync base
+
+    def trashed(self, side: Path) -> list[str]:
+        return sorted(str(p.relative_to(t)) for t in (side / "claude-sync" / "trash").glob("*")
+                      for p in t.rglob("*") if p.is_file())
+
+    def test_state_is_written_on_both_sides(self):
+        self.write(self.local, self.transcript(U1), "a\n")
+        self.sync()
+        for side in (self.local, self.remote):
+            states = list((side / "claude-sync" / "state").glob("*.json"))
+            self.assertEqual(len(states), 1, side)
+            self.assertIn(self.transcript(U1), json.loads(states[0].read_text())["files"])
+
+    def test_first_sync_never_deletes(self):
+        self.write(self.remote, self.transcript(U1), "a\n")
+        out = self.sync()
+        self.assertIn("first sync", out)
+        self.assertEqual(self.read(self.local, self.transcript(U1)), "a\n")
+
+    def test_deletion_propagates_to_trash(self):
+        self.write(self.local, self.transcript(U1), "a\n")
+        self.write(self.local, self.transcript(U2), "keep\n")
+        self.sync()
+        (self.local / self.transcript(U1)).unlink()
+        self.sync()
+        self.assertFalse((self.remote / self.transcript(U1)).exists())
+        self.assertEqual(self.trashed(self.remote), [self.transcript(U1)])
+        self.assertIn("same", self.sync("-n"))
+
+    def test_deletion_from_remote_side(self):
+        self.write(self.local, self.transcript(U1), "a\n")
+        self.write(self.local, self.transcript(U2), "keep\n")
+        self.sync()
+        (self.remote / self.transcript(U1)).unlink()
+        self.sync()
+        self.assertFalse((self.local / self.transcript(U1)).exists())
+        self.assertEqual(self.trashed(self.local), [self.transcript(U1)])
+
+    def test_changed_beats_deleted(self):
+        self.write(self.local, self.transcript(U1), "a\n")
+        self.write(self.local, self.transcript(U2), "keep\n")
+        self.sync()
+        (self.local / self.transcript(U1)).unlink()
+        self.write(self.remote, self.transcript(U1), "a\nmore\n")
+        self.sync()
+        self.assertEqual(self.read(self.local, self.transcript(U1)), "a\nmore\n")
+
+    def test_mass_delete_is_refused(self):
+        for i in range(30):
+            self.write(self.local, f"projects/{ENC}/memory/m{i}.md", "x\n")
+        self.write(self.local, self.transcript(U1), "a\n")
+        self.sync()
+        shutil.rmtree(self.local / "projects" / ENC / "memory")
+        out = self.sync(ok=False)
+        self.assertIn("refusing to delete 30", out)
+        self.assertEqual(len(list((self.remote / "projects" / ENC / "memory").glob("*"))), 30)
+        self.sync("--allow-deletes")
+        self.assertFalse((self.remote / "projects" / ENC / "memory").exists())
+
+    def test_mutable_three_way(self):
+        rel = f"projects/{ENC}/memory/fact.md"
+        self.write(self.local, rel, "v1\n")
+        self.write(self.local, self.transcript(U1), "a\n")
+        self.sync()
+        self.write(self.remote, rel, "v2 from remote\n")
+        self.sync()
+        self.assertEqual(self.read(self.local, rel), "v2 from remote\n")
+        self.write(self.local, rel, "v3 local\n")
+        self.sync()
+        self.assertEqual(self.read(self.remote, rel), "v3 local\n")
+
+    def test_mutable_changed_on_both_keeps_local_and_saves_remote(self):
+        rel = f"projects/{ENC}/memory/fact.md"
+        self.write(self.local, rel, "v1\n")
+        self.write(self.local, self.transcript(U1), "a\n")
+        self.sync()
+        self.write(self.local, rel, "local edit\n")
+        self.write(self.remote, rel, "remote edit\n")
+        self.sync()
+        self.assertEqual(self.read(self.local, rel), "local edit\n")
+        self.assertEqual(self.read(self.remote, rel), "local edit\n")
+        copies = list((self.local / rel).parent.glob("fact.md.conflict-*"))
+        self.assertEqual([c.read_text() for c in copies], ["remote edit\n"])
+
+    def test_memory_index_is_unioned(self):
+        rel = f"projects/{ENC}/memory/MEMORY.md"
+        self.write(self.local, rel, "- [A](a.md)\n- [B](b.md)\n")
+        self.write(self.remote, rel, "- [A](a.md)\n- [C](c.md)\n")
+        self.write(self.local, self.transcript(U1), "a\n")
+        self.sync()
+        want = "- [A](a.md)\n- [B](b.md)\n- [C](c.md)\n"
+        self.assertEqual(self.read(self.local, rel), want)
+        self.assertEqual(self.read(self.remote, rel), want)
+
+    def test_history_is_merged_by_timestamp(self):
+        line = lambda ts, text: json.dumps({"display": text, "timestamp": ts, "project": PROJECT_DIR})  # noqa: E731
+        self.write(self.local, "history.jsonl", "\n".join([line(1, "a"), line(3, "c")]) + "\n")
+        self.write(self.remote, "history.jsonl", "\n".join([line(1, "a"), line(2, "b")]) + "\n")
+        self.write(self.local, self.transcript(U1), "a\n")
+        self.sync()
+        want = "\n".join([line(1, "a"), line(2, "b"), line(3, "c")]) + "\n"
+        self.assertEqual(self.read(self.local, "history.jsonl"), want)
+        self.assertEqual(self.read(self.remote, "history.jsonl"), want)
+
+    def test_config_only_with_flag(self):
+        self.write(self.local, "CLAUDE.md", "- be terse\n")
+        self.write(self.local, "skills/x/SKILL.md", "skill\n")
+        self.write(self.local, self.transcript(U1), "a\n")
+        self.sync()
+        self.assertFalse((self.remote / "CLAUDE.md").exists())
+        self.sync("--config")
+        self.assertEqual(self.read(self.remote, "CLAUDE.md"), "- be terse\n")
+        self.assertEqual(self.read(self.remote, "skills/x/SKILL.md"), "skill\n")
+
+    def test_old_trash_is_purged(self):
+        old = self.local / "claude-sync" / "trash" / "20200101T000000"
+        self.write(old, "x", "gone")
+        os.utime(old, (0, 0))
+        self.write(self.local, self.transcript(U1), "a\n")
+        self.sync("-n")
+        self.assertFalse(old.exists())
 
 
 if __name__ == "__main__":

@@ -59,27 +59,44 @@ sync(host, scope):
                      otherwise           -> merge tails (keep both originals as .conflict)
         write-once, differs              -> conflict copy
         mutable: only one side != base   -> take it
-                 both changed            -> conflict copy
-    merge history.jsonl
-    rsync push list, rsync pull list
-    save base
+                 both changed            -> local wins; remote copy saved as .conflict
+        MEMORY.md, history.jsonl differ  -> union of both
+    refuse if deleting > 20 files and > 25% of the scope (--allow-deletes)
+    rsync push list, rsync pull list, trash deletions
+    save base on both sides
 ```
 
 ## Decisions
 
+- **Tool state** lives in `~/.claude/claude-sync/` on each machine: `lock`,
+  `state/<peer-machine-id>.json` (the sync base: `{path: sha256}` after the last
+  sync), `trash/` and `incoming/` (staging). Both machines hold the same base
+  for their pair, keyed by `/etc/machine-id`, so it doesn't matter which one
+  starts the sync. Keeping it inside `~/.claude` puts trash and staging on the
+  same filesystem as the data, so moves are renames. The hash cache stays in
+  `~/.cache/claude-sync/`.
 - **Deletions** are tracked against the sync base and applied to the other side.
-  The deleted file is first moved to `~/.local/state/claude-sync/trash/`, and
-  trash older than 30 days is cleared at the start of each sync. A file that
-  was changed on one side and deleted on the other is kept.
-- **Running sessions:** open on the receiving side, always skipped (rsync
-  replaces the file and the running process keeps writing to the old one).
+  The deleted file is first moved to `~/.claude/claude-sync/trash/<timestamp>/`,
+  and trash older than 30 days is cleared at the start of each sync. A file that
+  was changed on one side and deleted on the other is kept. The first sync with
+  a host deletes nothing. More than 20 deletions that are also over 25% of the
+  scope need `--allow-deletes`.
+- **Mutable files changed on both sides:** the machine running the sync keeps
+  its version and pushes it; the other version is saved next to it as
+  `<name>.conflict-<host>-<hash8>`. `MEMORY.md` is an index of one-line
+  pointers, so it is merged instead (our lines, then any of theirs we lack).
+- **Running sessions:** open on the receiving side, always skipped: the
+  running process doesn't see content pulled in underneath it and keeps
+  extending its own copy of the conversation. (Claude opens transcripts per
+  write rather than holding them open, so no writes are lost to a replaced file.)
   Busy on the sending side, skipped. Idle on the sending side, copied up to its
   last complete line, with a warning. The tool never stops or kills a session;
   it reports the pid, name and tmux pane so you can close it.
 - **Divergence** is resolved by merging the tails automatically, keeping both
-  originals as `<name>.conflict-<host>-<hash8>` (`/resume` ignores them; named by content, so a persisting conflict is saved once), provided
-  the milestone 4 test shows `--resume` handles merged transcripts. Until then,
-  write a conflict copy and wait for `resolve <uuid> --keep local|remote|merge`.
+  originals as `<name>.conflict-<host>-<hash8>` (`/resume` ignores them; named
+  by content, so a persisting conflict is saved once), provided the milestone 4
+  test shows `--resume` handles merged transcripts. Until then, write a
+  conflict copy and wait for `resolve <uuid> --keep local|remote|merge`.
 - **`history.jsonl`** is merged on every sync: union, sorted by `timestamp`,
   duplicates dropped.
 - **Version mismatch** between the two Claude installs prints a warning and the
@@ -93,7 +110,7 @@ sync(host, scope):
 1. [x] Dry run: manifests, live check, prefix classification, plan output.
 2. [x] Execute: rsync fast-forwards and new files; conflict copies; locking;
        idle-source snapshots; exclude `sessions-index.json`; version warning.
-3. [ ] Sync base state file; three-way for mutable files; deletions and trash;
+3. [x] Sync base state file; three-way for mutable files; deletions and trash;
        `history.jsonl` merge; `--config`.
 4. [ ] Tail merge and `resolve`; test which branch `--resume` continues, then
        make auto-merge the default if it passes.
@@ -104,3 +121,6 @@ sync(host, scope):
 
 - After a tail merge, which branch does `claude --resume` continue? (milestone 4)
 - Does Claude rebuild `sessions-index.json` on its own?
+- `history.jsonl` and `MEMORY.md` merges rewrite the file on both sides; lines
+  another process appends on the remote between the scan and the push are lost.
+  The window is seconds, but it exists.
