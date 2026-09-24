@@ -82,5 +82,5 @@ busy ones.
 - Idle sessions on the sending side: skip (current), or allow a snapshot copy?
 - Config sync (`--config`): wanted at all?
 - `history.jsonl`: in the default per-project scope, or only with `--all`?
-- Claude versions differ between machines (local 2.1.282, laptop not checked)
+- Claude versions differ between machines (local 2.1.282, laptop 2.1.280)
   -- transcript format compatibility.
