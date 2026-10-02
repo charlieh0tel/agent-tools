@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -26,6 +27,8 @@ CLAUDE_NPM_RE = re.compile(r"@anthropic-ai/claude-code/cli\.js")
 CODEX_NPM_RE = re.compile(r"@openai/codex")
 ETIME_RE = re.compile(r"(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$")
 CLAUDE_SESSION_FIELDS = ("name", "status", "sessionId", "entrypoint", "version")
+WHITESPACE_RE = re.compile(r"\s+")
+ELLIPSIS = "..."
 
 
 @dataclass
@@ -317,15 +320,30 @@ def tilde(path: str | None) -> str:
     return path
 
 
-def format_table(agents: list[Agent]) -> str:
+def one_line(text: str) -> str:
+    """Collapse newlines and runs of whitespace so a prompt in argv stays on one row."""
+    return WHITESPACE_RE.sub(" ", text).strip()
+
+
+def truncate(text: str, width: int) -> str:
+    """Cut text to width with an ellipsis; width <= 0 means unlimited."""
+    if width <= 0 or len(text) <= width:
+        return text
+    if width <= len(ELLIPSIS):
+        return text[:width]
+    return text[: width - len(ELLIPSIS)] + ELLIPSIS
+
+
+def format_table(agents: list[Agent], width: int | None = None) -> str:
+    """Render agents as a table. INFO is cut so rows fit in ``width`` columns (None: no limit)."""
     header = ["AGENT", "PID", "STATUS", "AGE", "TTY", "TMUX", "CWD", "INFO"]
     rows: list[list[str]] = []
     for a in agents:
         info: list[str] = []
         if a.extra.get("name"):
-            info.append(str(a.extra["name"]))
+            info.append(one_line(str(a.extra["name"])))
         if a.args:
-            info.append(a.args)
+            info.append(one_line(a.args))
         if a.child:
             info.append(f"(child of {a.ppid})")
         status = str(a.extra.get("status", "-"))
@@ -343,7 +361,17 @@ def format_table(agents: list[Agent]) -> str:
         )
     widths = [max(len(r[i]) for r in [header, *rows]) for i in range(len(header) - 1)]
     fmt = "  ".join(f"{{:<{w}}}" for w in widths) + "  {}"
-    return "\n".join(fmt.format(*r).rstrip() for r in [header, *rows])
+    info_width = width - (sum(widths) + 2 * len(widths)) if width is not None else 0
+    return "\n".join(
+        fmt.format(*r[:-1], truncate(r[-1], info_width)).rstrip() for r in [header, *rows]
+    )
+
+
+def output_width(wide: bool) -> int | None:
+    """Terminal width for truncation, or None when unlimited (--wide or not a tty)."""
+    if wide or not sys.stdout.isatty():
+        return None
+    return shutil.get_terminal_size().columns
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -358,6 +386,9 @@ def main(argv: list[str] | None = None) -> int:
         "--tree", action="store_true", help="show wrapper/child processes instead of collapsing"
     )
     ap.add_argument("--cwd-only", action="store_true", help="print unique working directories only")
+    ap.add_argument(
+        "-w", "--wide", action="store_true", help="do not truncate INFO to the terminal width"
+    )
     args = ap.parse_args(argv)
 
     agents = collect(list_processes(), show_tree=args.tree, kinds=set(args.kind or ()))
@@ -371,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
     if not agents:
         print("no running agents found", file=sys.stderr)
         return 1
-    print(format_table(agents))
+    print(format_table(agents, width=output_width(args.wide)))
     return 0
 
 

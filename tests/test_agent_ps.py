@@ -10,7 +10,9 @@ from agent_ps import (
     etime_seconds,
     format_table,
     human_age,
+    one_line,
     tmux_target,
+    truncate,
 )
 
 CODEX_BIN = (
@@ -211,3 +213,34 @@ def test_format_table(monkeypatch):
     ]
     assert out[1].split() == claude_row
     assert out[2].split() == ["codex", "200", "-", "1m", "pts/1", "flux:0.0", "~/b"]
+
+
+def test_one_line_collapses_whitespace():
+    assert one_line("a\nb\n\n  c\td ") == "a b c d"
+
+
+def test_truncate():
+    assert truncate("abcdef", 0) == "abcdef"
+    assert truncate("abcdef", 6) == "abcdef"
+    assert truncate("abcdefgh", 6) == "abc..."
+    assert truncate("abcdef", 2) == "ab"
+
+
+def test_format_table_keeps_multiline_prompt_on_one_row(monkeypatch):
+    monkeypatch.setattr(agent_ps, "HOME", type("P", (), {"__str__": lambda self: "/work"})())
+    prompt = "\n".join(f"line {i} of a long prompt" for i in range(30))
+    procs = [claude(100, 1, prompt, "--permission-mode", "plan")]
+    agents = collect(procs, cwd_of=fake_cwd, session_info=lambda pid: {}, panes=PANES)
+    out = format_table(agents).splitlines()
+    assert len(out) == 2
+    assert out[1].endswith("line 29 of a long prompt --permission-mode plan")
+
+
+def test_format_table_truncates_info_to_width(monkeypatch):
+    monkeypatch.setattr(agent_ps, "HOME", type("P", (), {"__str__": lambda self: "/work"})())
+    procs = [claude(100, 1, "x" * 200)]
+    agents = collect(procs, cwd_of=fake_cwd, session_info=lambda pid: {}, panes=PANES)
+    out = format_table(agents, width=80).splitlines()
+    assert all(len(line) <= 80 for line in out)
+    assert out[1].endswith("...")
+    assert format_table(agents).splitlines()[1].endswith("x" * 200)

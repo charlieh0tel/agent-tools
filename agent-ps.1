@@ -1,9 +1,9 @@
-.TH AGENT-PS 1 "2026-10-02" "agent-tools 1.0.0" "User Commands"
+.TH AGENT-PS 1 "2026-10-02" "agent-tools 1.0.1" "User Commands"
 .SH NAME
 agent-ps \- list running coding agents and their working directories
 .SH SYNOPSIS
 .B agent-ps
-[\fB\-\-json\fR] [\fB\-\-cwd\-only\fR] [\fB\-\-tree\fR] [\fB\-\-kind\fR \fIKIND\fR]...
+[\fB\-\-json\fR] [\fB\-\-cwd\-only\fR] [\fB\-\-tree\fR] [\fB\-\-wide\fR] [\fB\-\-kind\fR \fIKIND\fR]...
 .SH DESCRIPTION
 .B agent-ps
 lists running Claude Code and Codex processes with their working directory,
@@ -26,6 +26,11 @@ Print unique working directories, one per line.
 .TP
 .B \-\-tree
 Show wrapper and child processes instead of collapsing them.
+.TP
+.BR \-w ", " \-\-wide
+Do not truncate the INFO column to the terminal width. Newlines in arguments
+are always collapsed so each agent stays on one row; by default INFO is also cut
+to fit when stdout is a terminal.
 .TP
 .BI \-\-kind " KIND"
 Only show agents of this kind

@@ -11,6 +11,7 @@ and working directory.
 ./agent_ps --cwd-only    # unique cwds
 ./agent_ps --kind codex  # filter
 ./agent_ps --tree        # show child processes
+./agent_ps --wide        # do not truncate INFO to the terminal width
 ```
 
 Plain Python 3, no dependencies.
