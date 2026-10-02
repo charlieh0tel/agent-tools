@@ -13,7 +13,15 @@ and working directory.
 ./agent_ps --tree        # show child processes
 ```
 
-Plain Python 3, no dependencies. `uv run agent-ps` also works.
+Plain Python 3, no dependencies.
+
+```
+$ agent-ps
+AGENT   PID      STATUS  AGE    TTY    TMUX      CWD              INFO
+claude  3218277  busy    16m    pts/0  -         ~/src/apt-repo   apt-repo-72
+claude  2842282  busy    3h46m  pts/4  flux:0.0  ~/src/flux       flux --resume
+claude  2843101  idle    3h45m  pts/9  api:0.0   ~/src/flux-api   flux-api --resume
+```
 
 ## Install (Debian/Ubuntu)
 
