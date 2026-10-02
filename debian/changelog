@@ -1,3 +1,10 @@
+agent-tools (1.0.1) unstable; urgency=low
+
+  * agent-ps: keep INFO on one row and cut it to the terminal width; a prompt
+    passed in argv no longer spills across the table. Add --wide to disable.
+
+ -- Christopher Hoover <ch@murgatroid.com>  Fri, 02 Oct 2026 14:23:35 -0700
+
 agent-tools (1.0.0) unstable; urgency=low
 
   * First release: agent-ps lists running Claude Code and Codex agents with
