@@ -1,0 +1,38 @@
+.TH AGENT-PS 1 "2026-10-02" "agent-tools 1.0.0" "User Commands"
+.SH NAME
+agent-ps \- list running coding agents and their working directories
+.SH SYNOPSIS
+.B agent-ps
+[\fB\-\-json\fR] [\fB\-\-cwd\-only\fR] [\fB\-\-tree\fR] [\fB\-\-kind\fR \fIKIND\fR]...
+.SH DESCRIPTION
+.B agent-ps
+lists running Claude Code and Codex processes with their working directory,
+age, tty and tmux pane. Detection is process based, so the output reflects
+what is actually running. Claude rows are enriched from the per-session
+metadata under
+.IR ~/.claude/sessions .
+.PP
+Codex runs as a node wrapper with a native child and helper processes;
+these are collapsed to the top-level pid unless
+.B \-\-tree
+is given.
+.SH OPTIONS
+.TP
+.B \-\-json
+Emit JSON instead of a table.
+.TP
+.B \-\-cwd\-only
+Print unique working directories, one per line.
+.TP
+.B \-\-tree
+Show wrapper and child processes instead of collapsing them.
+.TP
+.BI \-\-kind " KIND"
+Only show agents of this kind
+.RB ( claude " or " codex ).
+May be repeated.
+.SH EXIT STATUS
+0 on success; 1 when no agents are found (table mode only).
+.SH SEE ALSO
+.BR ps (1),
+.BR tmux (1)

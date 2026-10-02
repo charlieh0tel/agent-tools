@@ -1,0 +1,18 @@
+Source: agent-tools
+Section: utils
+Priority: optional
+Maintainer: Christopher Hoover <ch@murgatroid.com>
+Build-Depends: debhelper-compat (= 13), python3, python3-pytest
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+Homepage: https://github.com/charlieh0tel/agent-tools
+
+Package: agent-tools
+Architecture: all
+Depends: ${misc:Depends}, python3 (>= 3.10), procps
+Recommends: tmux
+Description: Find running coding agents and their working directories
+ agent-ps lists running Claude Code and Codex processes with their
+ working directory, age, tty and tmux pane. Detection is process-based
+ (ps and /proc), and Claude rows are enriched from the per-session
+ metadata Claude Code writes under ~/.claude/sessions.
