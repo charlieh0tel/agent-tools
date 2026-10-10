@@ -392,7 +392,7 @@ def classify(local: dict, remote_: dict, base: dict, rels, remote: Remote) -> li
                 plan.append(["pull", rel, "changed there, deleted here"])
         elif L["hash"] == R["hash"]:
             plan.append(["same", rel, ""])
-        elif kind == "history" or rel.endswith("/memory/MEMORY.md"):
+        elif merger(rel):
             plan.append(["merge", rel, "union"])
         elif kind == "append":
             if L["size"] > R["size"]:
@@ -578,6 +578,15 @@ def merge_index(ours: str, theirs: str) -> str:
     )
 
 
+def merger(rel: str):
+    """The function that merges two versions of rel, or None if rel isn't merged."""
+    if rel == HISTORY:
+        return merge_history
+    if rel.endswith("/memory/MEMORY.md"):
+        return merge_index
+    return None
+
+
 def write_atomic(path: Path, text: str) -> None:
     tmp = path.with_name(path.name + ".claude-sync-tmp")
     tmp.write_text(text)
@@ -610,8 +619,7 @@ def execute(plan: list, remote_: dict, remote: Remote) -> dict:
         # Re-read ours right before writing, so lines appended since the scan survive.
         ours = (root / rel).read_text()
         theirs = (staging / rel).read_text()
-        fn = merge_history if rel == HISTORY else merge_index
-        text = fn(ours, theirs)
+        text = merger(rel)(ours, theirs)
         write_atomic(root / rel, text)
         merged[rel] = hashlib.sha256(text.encode()).hexdigest()
     shutil.rmtree(staging, ignore_errors=True)
