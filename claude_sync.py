@@ -5,6 +5,7 @@ The same file runs on both ends: locally as the CLI, and on the remote host as
 `ssh host python3 - --remote ...` with this script fed over stdin, so nothing
 has to be installed on the other machine.
 """
+
 import argparse
 import fcntl
 import hashlib
@@ -19,13 +20,18 @@ import time
 from pathlib import Path
 
 UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-CACHE = Path(os.environ.get("CLAUDE_SYNC_CACHE", Path.home() / ".cache" / "claude-sync" / "hash-cache.json"))
+CACHE = Path(
+    os.environ.get("CLAUDE_SYNC_CACHE", Path.home() / ".cache" / "claude-sync" / "hash-cache.json")
+)
 SYNC = "claude-sync"  # our own dir inside ~/.claude: lock, state/, trash/, incoming/
 EXCLUDE = {"sessions-index.json"}
 HISTORY = "history.jsonl"
 CONFIG = ["CLAUDE.md", "settings.json", "keybindings.json", "skills"]
 TRASH_DAYS = 30
-MASS_DELETE = (20, 0.25)  # refuse to delete more than this many files AND this fraction of the scope
+MASS_DELETE = (
+    20,
+    0.25,
+)  # refuse to delete more than this many files AND this fraction of the scope
 
 
 def claude_dir() -> Path:
@@ -45,6 +51,7 @@ def machine_id() -> str:
 
 
 # ---------------------------------------------------------------- file kinds
+
 
 def kind_of(rel: str) -> str:
     """append: only ever grows at the end; once: written once; mutable: anything else."""
@@ -84,10 +91,12 @@ def in_scope(rel: str, scope: dict, sessions: set[str]) -> bool:
     if scope["project"] is None:
         return top in ("projects", "file-history")
     return rel.startswith(f"projects/{scope['project']}/") or (
-        top == "file-history" and session_of(rel) in sessions)
+        top == "file-history" and session_of(rel) in sessions
+    )
 
 
 # ------------------------------------------------------------------ scanning
+
 
 def file_hash(path: Path, limit: int | None = None) -> str:
     h = hashlib.sha256()
@@ -132,10 +141,10 @@ def scope_roots(root: Path, scope: dict) -> list[Path]:
     else:
         proj = root / "projects" / scope["project"]
         uuids = {p.stem for p in proj.glob("*.jsonl")} | set(scope["uuids"])
-        roots = [proj] + [root / "file-history" / u for u in sorted(uuids)]
+        roots = [proj, *(root / "file-history" / u for u in sorted(uuids))]
     if scope["config"]:
         roots += [root / name for name in CONFIG]
-    return roots + [root / HISTORY]
+    return [*roots, root / HISTORY]
 
 
 def walk(base: Path):
@@ -219,8 +228,12 @@ def trash(rels: list[str]) -> None:
 
 def scan(scope: dict) -> dict:
     purge_trash()
-    return {"manifest": manifest(scope), "live": live_sessions(),
-            "version": claude_version(), "machine": machine_id()}
+    return {
+        "manifest": manifest(scope),
+        "live": live_sessions(),
+        "version": claude_version(),
+        "machine": machine_id(),
+    }
 
 
 def prefix_hashes(requests: list) -> dict:
@@ -229,6 +242,7 @@ def prefix_hashes(requests: list) -> dict:
 
 
 # ------------------------------------------------------------------- remote
+
 
 class Remote:
     def __init__(self, host: str, remote_dir: str | None):
@@ -247,13 +261,15 @@ class Remote:
     def _fail(self, what: str, code: int, stderr: bytes):
         err = stderr.decode(errors="replace").strip()
         if code == 255 and self.host != "@local":
-            sys.exit(f"claude-sync: can't reach {self.host}: {err.splitlines()[-1] if err else 'ssh failed'}")
+            sys.exit(
+                f"claude-sync: can't reach {self.host}: {err.splitlines()[-1] if err else 'ssh failed'}"
+            )
         sys.exit(f"claude-sync: {self.host}: {what} failed (exit {code}): {err}")
 
     def call(self, op: str, arg) -> dict:
         cmd = ["python3", "-", "--remote", op, json.dumps(arg)]
         if self.remote_dir:
-            cmd = ["env", f"CLAUDE_SYNC_DIR={self.remote_dir}"] + cmd
+            cmd = ["env", f"CLAUDE_SYNC_DIR={self.remote_dir}", *cmd]
         r = subprocess.run(self._argv(shlex.join(cmd)), input=self.script, capture_output=True)
         if r.returncode != 0:
             self._fail(op, r.returncode, r.stderr)
@@ -270,10 +286,18 @@ class Remote:
         `python3 -` reads the script to EOF before running it, so the lock can't
         be held by this script; flock + cat keeps it until our end of stdin closes.
         """
-        d = shlex.quote(f"{self.remote_dir}/{SYNC}") if self.remote_dir else f'"$HOME/.claude/{SYNC}"'
+        d = (
+            shlex.quote(f"{self.remote_dir}/{SYNC}")
+            if self.remote_dir
+            else f'"$HOME/.claude/{SYNC}"'
+        )
         command = f"mkdir -p {d} && flock -n {d}/lock -c 'echo locked; exec cat >/dev/null'"
-        self.lock_proc = subprocess.Popen(self._argv(command), stdin=subprocess.PIPE,
-                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.lock_proc = subprocess.Popen(
+            self._argv(command),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
         if self.lock_proc.stdout.readline().strip() == b"locked":
             return
         code = self.lock_proc.wait()
@@ -302,15 +326,16 @@ def remote_main(op: str, arg: str) -> None:
 
 def lock_local():
     sync_dir().mkdir(parents=True, exist_ok=True)
-    f = open(sync_dir() / "lock", "w")
+    fd = os.open(sync_dir() / "lock", os.O_WRONLY | os.O_CREAT)
     try:
-        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         sys.exit("claude-sync: another sync is running on this machine")
-    return f  # the lock lasts as long as the file stays open
+    return fd  # the lock lasts as long as the fd stays open
 
 
 # ---------------------------------------------------------------- sync base
+
 
 def state_path(peer: str) -> Path:
     return sync_dir() / "state" / f"{peer}.json"
@@ -336,6 +361,7 @@ def save_base(peer: str, me: str, files: dict, remote: Remote) -> None:
 
 # --------------------------------------------------------------------- plan
 
+
 def classify(local: dict, remote_: dict, base: dict, rels, remote: Remote) -> list[list]:
     """Return [action, rel, detail] for each path, ignoring liveness.
 
@@ -353,14 +379,14 @@ def classify(local: dict, remote_: dict, base: dict, rels, remote: Remote) -> li
         elif R is None:
             if B is None:
                 plan.append(["push", rel, "new"])
-            elif B == L["hash"]:
+            elif L["hash"] == B:
                 plan.append(["del-local", rel, "deleted on remote"])
             else:
                 plan.append(["push", rel, "changed here, deleted there"])
         elif L is None:
             if B is None:
                 plan.append(["pull", rel, "new"])
-            elif B == R["hash"]:
+            elif R["hash"] == B:
                 plan.append(["del-remote", rel, "deleted here"])
             else:
                 plan.append(["pull", rel, "changed there, deleted here"])
@@ -378,9 +404,9 @@ def classify(local: dict, remote_: dict, base: dict, rels, remote: Remote) -> li
                 plan.append(["conflict", rel, "diverged"])
         elif kind == "once":
             plan.append(["conflict", rel, "write-once file differs"])
-        elif B == L["hash"]:
+        elif L["hash"] == B:
             plan.append(["pull", rel, "changed there"])
-        elif B == R["hash"]:
+        elif R["hash"] == B:
             plan.append(["push", rel, "changed here"])
         else:
             plan.append(["override", rel, "changed on both sides; keeping local"])
@@ -394,7 +420,13 @@ def classify(local: dict, remote_: dict, base: dict, rels, remote: Remote) -> li
     return plan
 
 
-WRITES = {"push": "remote", "override": "remote", "del-remote": "remote", "pull": "local", "del-local": "local"}
+WRITES = {
+    "push": "remote",
+    "override": "remote",
+    "del-remote": "remote",
+    "pull": "local",
+    "del-local": "local",
+}
 
 
 def apply_live(plan: list, local: dict, remote_: dict, live: dict, host: str) -> dict:
@@ -443,15 +475,26 @@ def human(n: int) -> str:
 
 
 def describe(info: dict) -> str:
-    return (f"pid {info['pid']}, {info.get('status')}, tmux {info.get('tmux') or '-'}, "
-            f"name {info.get('name') or '-'}")
+    return (
+        f"pid {info['pid']}, {info.get('status')}, tmux {info.get('tmux') or '-'}, "
+        f"name {info.get('name') or '-'}"
+    )
 
 
-ARROWS = {"push": "->", "pull": "<-", "override": "->", "merge": "<->",
-          "del-local": "x local", "del-remote": "x remote", "conflict": "!!"}
+ARROWS = {
+    "push": "->",
+    "pull": "<-",
+    "override": "->",
+    "merge": "<->",
+    "del-local": "x local",
+    "del-remote": "x remote",
+    "conflict": "!!",
+}
 
 
-def print_plan(plan: list, local: dict, remote_: dict, live: dict, snapshots: dict, host: str) -> None:
+def print_plan(
+    plan: list, local: dict, remote_: dict, live: dict, snapshots: dict, host: str
+) -> None:
     skipped = {}
     for action, rel, detail in plan:
         if action == "skip":
@@ -478,12 +521,23 @@ def print_plan(plan: list, local: dict, remote_: dict, live: dict, snapshots: di
         counts[action] = counts.get(action, 0) + 1
     if "skip" in counts:
         counts["skip"] = f"{len({s for s, _ in skipped})} sessions"
-    order = ("push", "pull", "merge", "override", "del-local", "del-remote", "conflict", "skip", "same")
+    order = (
+        "push",
+        "pull",
+        "merge",
+        "override",
+        "del-local",
+        "del-remote",
+        "conflict",
+        "skip",
+        "same",
+    )
     summary = ", ".join(f"{counts[a]} {a}" for a in order if a in counts)
     print(f"\n{summary or 'nothing to do'}")
 
 
 # ------------------------------------------------------------------ execute
+
 
 def rsync(src: str, dst: str, paths: list[str] | None = None, mkpath: bool = False) -> None:
     """Copy src to dst; with paths, copy only those (relative to src)."""
@@ -492,7 +546,7 @@ def rsync(src: str, dst: str, paths: list[str] | None = None, mkpath: bool = Fal
     cmd = ["rsync", "-a"] + (["--mkpath"] if mkpath else [])
     if paths is not None:
         cmd += ["--files-from=-", "--from0"]
-    r = subprocess.run(cmd + [src, dst], input="\0".join(paths or []).encode())
+    r = subprocess.run([*cmd, src, dst], input="\0".join(paths or []).encode())
     if r.returncode != 0:
         sys.exit(f"claude-sync: rsync {src} -> {dst} failed (exit {r.returncode})")
 
@@ -517,7 +571,11 @@ def merge_index(ours: str, theirs: str) -> str:
     """MEMORY.md: our lines in order, then any of theirs we don't have."""
     have = set(ours.splitlines())
     extra = [line for line in theirs.splitlines() if line.strip() and line not in have]
-    return ours + ("" if not ours or ours.endswith("\n") else "\n") + "".join(line + "\n" for line in extra)
+    return (
+        ours
+        + ("" if not ours or ours.endswith("\n") else "\n")
+        + "".join(line + "\n" for line in extra)
+    )
 
 
 def write_atomic(path: Path, text: str) -> None:
@@ -536,8 +594,11 @@ def execute(plan: list, remote_: dict, remote: Remote) -> dict:
 
     # Fetch remote versions needed locally (conflict copies, merge inputs) into a
     # staging dir on the same filesystem, so they can be moved into place.
-    saves = [rel for rel in get("conflict") + get("override")
-             if not (root / conflict_name(rel, remote.host, remote_[rel])).exists()]
+    saves = [
+        rel
+        for rel in get("conflict") + get("override")
+        if not (root / conflict_name(rel, remote.host, remote_[rel])).exists()
+    ]
     staging = sync_dir() / "incoming"
     shutil.rmtree(staging, ignore_errors=True)
     rsync(remote.rsync_root(), f"{staging}/", saves + get("merge"))
@@ -561,9 +622,11 @@ def execute(plan: list, remote_: dict, remote: Remote) -> dict:
     if get("del-remote"):
         remote.call("trash", get("del-remote"))
 
-    print(f"done: pushed {len(get('push')) + len(get('override'))}, pulled {len(get('pull'))}, "
-          f"merged {len(get('merge'))}, deleted {len(get('del-local')) + len(get('del-remote'))}, "
-          f"saved {len(saves)} conflict copies")
+    print(
+        f"done: pushed {len(get('push')) + len(get('override'))}, pulled {len(get('pull'))}, "
+        f"merged {len(get('merge'))}, deleted {len(get('del-local')) + len(get('del-remote'))}, "
+        f"saved {len(saves)} conflict copies"
+    )
     return merged
 
 
@@ -584,6 +647,7 @@ def new_base(plan: list, local: dict, remote_: dict, base: dict, merged: dict) -
 
 # ---------------------------------------------------------------------- cli
 
+
 def cmd_sync(args) -> None:
     project = None if args.all else encode(os.path.abspath(args.project))
     remote = Remote(args.host, args.remote_dir)
@@ -596,7 +660,9 @@ def cmd_sync(args) -> None:
     # The peer's machine id is only known after its scan, but its base lists
     # sessions we must scan for, so scan the remote first with every known uuid.
     bases = {p.stem: load_base(p.stem) for p in (sync_dir() / "state").glob("*.json")}
-    known = set().union(*(project_sessions(project, b) for b in bases.values())) if project else set()
+    known = (
+        set().union(*(project_sessions(project, b) for b in bases.values())) if project else set()
+    )
     scope = {"project": project, "config": args.config, "uuids": sorted(known)}
     remote_scan = remote.call("scan", scope)
     local_scan = scan(scope)
@@ -606,8 +672,12 @@ def cmd_sync(args) -> None:
         sys.exit(f"claude-sync: {args.host} is this machine")
     base = bases.get(peer, {})
 
-    sessions = project_sessions(project, local.keys() | remote_.keys() | base.keys()) if project else set()
-    rels = {rel for rel in local.keys() | remote_.keys() | base.keys() if in_scope(rel, scope, sessions)}
+    sessions = (
+        project_sessions(project, local.keys() | remote_.keys() | base.keys()) if project else set()
+    )
+    rels = {
+        rel for rel in local.keys() | remote_.keys() | base.keys() if in_scope(rel, scope, sessions)
+    }
     if project and not any(r.startswith("projects/") for r in rels):
         sys.exit(f"claude-sync: no sessions for {args.project} on either side")
 
@@ -625,14 +695,16 @@ def cmd_sync(args) -> None:
     deletes = sum(1 for p in plan if p[0].startswith("del-"))
     limit, fraction = MASS_DELETE
     if deletes > limit and deletes > fraction * len(rels) and not args.allow_deletes:
-        sys.exit(f"\nclaude-sync: refusing to delete {deletes} of {len(rels)} files; "
-                 "rerun with --allow-deletes if that's intended")
+        sys.exit(
+            f"\nclaude-sync: refusing to delete {deletes} of {len(rels)} files; "
+            "rerun with --allow-deletes if that's intended"
+        )
 
     if not args.dry_run:
         merged = execute(plan, remote_, remote)
         save_base(peer, me, new_base(plan, local, remote_, base, merged), remote)
         remote.unlock()
-        local_lock.close()
+        os.close(local_lock)
 
 
 def main() -> None:
@@ -647,8 +719,11 @@ def main() -> None:
     g = s.add_mutually_exclusive_group()
     g.add_argument("--project", default=".", help="project directory (default: cwd)")
     g.add_argument("--all", action="store_true", help="every project")
-    s.add_argument("--config", action="store_true",
-                   help="also sync CLAUDE.md, settings.json, keybindings.json and skills/")
+    s.add_argument(
+        "--config",
+        action="store_true",
+        help="also sync CLAUDE.md, settings.json, keybindings.json and skills/",
+    )
     s.add_argument("--dry-run", "-n", action="store_true", help="print the plan, change nothing")
     s.add_argument("--allow-deletes", action="store_true", help="allow deleting many files at once")
     s.add_argument("--remote-dir", help=argparse.SUPPRESS)  # for testing against a scratch copy

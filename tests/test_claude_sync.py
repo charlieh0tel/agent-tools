@@ -1,4 +1,5 @@
 """End-to-end tests: two scratch ~/.claude dirs synced through the @local test host."""
+
 import json
 import os
 import shutil
@@ -26,8 +27,9 @@ class SyncTest(unittest.TestCase):
         for side in (self.local, self.remote):
             (side / "projects" / ENC).mkdir(parents=True)
             (side / "sessions").mkdir()
-        self.env = dict(os.environ, CLAUDE_SYNC_DIR=str(self.local),
-                        CLAUDE_SYNC_CACHE=str(base / "cache.json"))
+        self.env = dict(
+            os.environ, CLAUDE_SYNC_DIR=str(self.local), CLAUDE_SYNC_CACHE=str(base / "cache.json")
+        )
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -43,14 +45,29 @@ class SyncTest(unittest.TestCase):
 
     def mark_live(self, side: Path, uuid: str, status: str) -> None:
         pid = os.getpid()
-        (side / "sessions" / f"{pid}.json").write_text(json.dumps(
-            {"pid": pid, "sessionId": uuid, "procStart": proc_start(pid), "status": status}))
+        (side / "sessions" / f"{pid}.json").write_text(
+            json.dumps(
+                {"pid": pid, "sessionId": uuid, "procStart": proc_start(pid), "status": status}
+            )
+        )
 
     def sync(self, *extra: str, ok: bool = True) -> str:
         r = subprocess.run(
-            [sys.executable, str(SCRIPT), "sync", "@local", "--project", PROJECT_DIR,
-             "--remote-dir", str(self.remote), *extra],
-            env=self.env, capture_output=True, text=True)
+            [
+                sys.executable,
+                str(SCRIPT),
+                "sync",
+                "@local",
+                "--project",
+                PROJECT_DIR,
+                "--remote-dir",
+                str(self.remote),
+                *extra,
+            ],
+            env=self.env,
+            capture_output=True,
+            text=True,
+        )
         if ok:
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         else:
@@ -68,7 +85,12 @@ class SyncTest(unittest.TestCase):
         self.write(self.local, self.transcript(U3), "local only\n")
         self.write(self.remote, f"file-history/{U2}/abc@v1", "backup\n")
         self.sync()
-        for rel in (self.transcript(U1), self.transcript(U2), self.transcript(U3), f"file-history/{U2}/abc@v1"):
+        for rel in (
+            self.transcript(U1),
+            self.transcript(U2),
+            self.transcript(U3),
+            f"file-history/{U2}/abc@v1",
+        ):
             self.assertEqual(self.read(self.local, rel), self.read(self.remote, rel), rel)
         self.assertEqual(self.read(self.local, self.transcript(U2)), "a\nb\nc\n")
         self.assertNotRegex(self.sync("-n"), r"(?m)^(push|pull|conflict) ")
@@ -141,20 +163,35 @@ class SyncTest(unittest.TestCase):
                 if subprocess.run(["flock", "-n", str(lock), "true"]).returncode:
                     break
             r = subprocess.run(
-                [sys.executable, str(SCRIPT), "sync", "@local", "--project", PROJECT_DIR,
-                 "--remote-dir", str(self.remote)], env=self.env, capture_output=True, text=True)
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "sync",
+                    "@local",
+                    "--project",
+                    PROJECT_DIR,
+                    "--remote-dir",
+                    str(self.remote),
+                ],
+                env=self.env,
+                capture_output=True,
+                text=True,
+            )
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("another sync", r.stderr)
         finally:
             holder.kill()
             holder.wait()
 
-
     # ------------------------------------------------ milestone 3: sync base
 
     def trashed(self, side: Path) -> list[str]:
-        return sorted(str(p.relative_to(t)) for t in (side / "claude-sync" / "trash").glob("*")
-                      for p in t.rglob("*") if p.is_file())
+        return sorted(
+            str(p.relative_to(t))
+            for t in (side / "claude-sync" / "trash").glob("*")
+            for p in t.rglob("*")
+            if p.is_file()
+        )
 
     def test_state_is_written_on_both_sides(self):
         self.write(self.local, self.transcript(U1), "a\n")
@@ -246,7 +283,9 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(self.read(self.remote, rel), want)
 
     def test_history_is_merged_by_timestamp(self):
-        line = lambda ts, text: json.dumps({"display": text, "timestamp": ts, "project": PROJECT_DIR})  # noqa: E731
+        def line(ts, text):
+            return json.dumps({"display": text, "timestamp": ts, "project": PROJECT_DIR})
+
         self.write(self.local, "history.jsonl", "\n".join([line(1, "a"), line(3, "c")]) + "\n")
         self.write(self.remote, "history.jsonl", "\n".join([line(1, "a"), line(2, "b")]) + "\n")
         self.write(self.local, self.transcript(U1), "a\n")
