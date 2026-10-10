@@ -38,6 +38,16 @@ process state), `plugins/`, caches, logs and telemetry.
 - `sessions/<pid>.json` records a running session. `procStart` equals field 22
   of `/proc/<pid>/stat`, which tells a live process from a reused PID. It also
   has `status` (`idle`/`busy`) and sometimes a `tmux` pane.
+- `claude --resume` loads one chain: from the tip named by the last
+  `last-prompt` record's `leafUuid` (in file order, not by timestamp) back
+  through `parentUuid` to the root. Other branches stay in the file but the
+  model never sees them. (Tested on 2.1.296.)
+- Re-parenting one tail's first message onto the other tail's last message
+  makes `--resume` see both: the model recalled the messages from both
+  tails, in file order, and continued from the second tail's tip.
+- Claude no longer maintains `sessions-index.json`: the two left were last
+  written 2026-02-03 and list none of the current sessions, and `--resume`
+  works without them.
 
 ## Algorithm
 
@@ -56,7 +66,7 @@ sync(host, scope):
           side unchanged since base      -> delete it there (copy to trash first)
         same hash                        -> nothing
         append-only: one is a prefix     -> fast-forward
-                     otherwise           -> merge tails (keep both originals as .conflict)
+                     otherwise           -> chain tails (keep both originals as .conflict)
         write-once, differs              -> conflict copy
         mutable: only one side != base   -> take it
                  both changed            -> local wins; remote copy saved as .conflict
@@ -92,11 +102,15 @@ sync(host, scope):
   Busy on the sending side, skipped. Idle on the sending side, copied up to its
   last complete line, with a warning. The tool never stops or kills a session;
   it reports the pid, name and tmux pane so you can close it.
-- **Divergence** is resolved by merging the tails automatically, keeping both
-  originals as `<name>.conflict-<host>-<hash8>` (`/resume` ignores them; named
-  by content, so a persisting conflict is saved once), provided the milestone 4
-  test shows `--resume` handles merged transcripts. Until then, write a
-  conflict copy and wait for `resolve <uuid> --keep local|remote|merge`.
+- **Divergence** is resolved by chaining the tails: shared prefix, then the
+  tail whose first message is older, then the other tail with its root
+  messages (those whose parent is in the shared prefix) re-parented onto the
+  first tail's last message. Appending the tails side by side is not enough,
+  since `--resume` would follow only the last one. Older first puts the newer
+  work at the tip, and both machines build the same file. A tail's other
+  roots (`/compact` boundaries, `parentUuid: null`) are left alone. Both
+  originals are kept as `<name>.conflict-<host>-<hash8>` (`/resume` ignores
+  them; named by content, so a persisting conflict is saved once).
 - **`history.jsonl`** is merged on every sync: union, sorted by `timestamp`,
   duplicates dropped.
 - **Version mismatch** between the two Claude installs prints a warning and the
@@ -112,15 +126,13 @@ sync(host, scope):
        idle-source snapshots; exclude `sessions-index.json`; version warning.
 3. [x] Sync base state file; three-way for mutable files; deletions and trash;
        `history.jsonl` merge; `--config`.
-4. [ ] Tail merge and `resolve`; test which branch `--resume` continues, then
-       make auto-merge the default if it passes.
+4. [ ] Chain diverged tails automatically; `resolve <uuid> --keep
+       local|remote|merge` to undo an unwanted merge.
 5. [ ] Install to `~/.local/bin` on both machines; opt-in SessionEnd hook and
        `cs` wrapper.
 
 ## Still to verify
 
-- After a tail merge, which branch does `claude --resume` continue? (milestone 4)
-- Does Claude rebuild `sessions-index.json` on its own?
 - `history.jsonl` and `MEMORY.md` merges rewrite the file on both sides; lines
   another process appends on the remote between the scan and the push are lost.
   The window is seconds, but it exists.
