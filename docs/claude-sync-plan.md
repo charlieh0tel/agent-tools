@@ -134,8 +134,20 @@ sync(host, scope):
 5. [x] Ship in the agent-tools package as `/usr/bin/claude-sync`.
 6. [ ] Opt-in SessionEnd hook and `cs` wrapper.
 
-## Still to verify
+## Known gaps
 
-- `history.jsonl` and `MEMORY.md` merges rewrite the file on both sides; lines
-  another process appends on the remote between the scan and the push are lost.
-  The window is seconds, but it exists.
+From an adversarial review (October 2026); the rest of its findings are fixed.
+
+- **Concurrent writers.** `history.jsonl` and `MEMORY.md` merges rewrite the
+  file on both sides; lines another process appends on the remote between the
+  scan and the push are lost. Likewise a session that starts after the liveness
+  check can have its transcript replaced underneath it. The window is seconds.
+  Fix: merge on the remote under its lock, and re-check liveness just before
+  each write.
+- **Diverged sync bases.** The base is now written on the peer before here, so
+  a failed push leaves both on the older base; a failed local write after a
+  successful push still leaves them apart. Fix: compare base generations at
+  the start of a sync and treat disagreement as a conflict.
+- **Symlinks inside `~/.claude`.** A symlinked project directory is followed,
+  so trash and merges act on its target. Only someone already acting as the
+  user can create one. Fix: refuse symlinks in every path component.
