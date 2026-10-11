@@ -1,3 +1,20 @@
+agent-tools (1.1.2) unstable; urgency=medium
+
+  * claude-sync: stop when a session record can't be read, instead of
+    treating that session as closed and syncing it while it runs.
+  * claude-sync: stop when a file or directory can't be scanned, instead of
+    treating it as deleted.
+  * claude-sync: save the sync base on the peer before saving it locally, so
+    a failed push can't make a later edit on the peer look unchanged.
+  * claude-sync: chain diverged transcripts onto the leaf --resume continues
+    from, put a compacted tail first, split on newlines only, and make
+    re-merging idempotent.
+  * claude-sync: refuse machine ids that could be paths, give each trash
+    operation its own directory, don't purge trash on a dry run, and make
+    rsync copy every file it is given.
+
+ -- Christopher Hoover <ch@murgatroid.com>  Sun, 11 Oct 2026 11:54:58 -0700
+
 agent-tools (1.1.1) unstable; urgency=medium
 
   * claude-sync: write merged transcripts, conflict copies and its own state
