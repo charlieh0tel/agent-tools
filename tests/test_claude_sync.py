@@ -101,14 +101,57 @@ class SyncTest(unittest.TestCase):
         self.assertIn("push", out)
         self.assertFalse((self.remote / self.transcript(U1)).exists())
 
-    def test_diverged_saves_one_conflict_copy(self):
+    def test_unchainable_divergence_saves_one_conflict_copy(self):
         self.write(self.local, self.transcript(U1), "a\nX\n")
         self.write(self.remote, self.transcript(U1), "a\nY\n")
-        self.sync()
+        self.assertIn("can't chain", self.sync())
         self.sync()
         copies = list((self.local / "projects" / ENC).glob(f"{U1}.jsonl.conflict-*"))
         self.assertEqual(len(copies), 1)
         self.assertEqual(copies[0].read_text(), "a\nY\n")
+        self.assertEqual(self.read(self.local, self.transcript(U1)), "a\nX\n")
+        self.assertEqual(self.read(self.remote, self.transcript(U1)), "a\nY\n")
+
+    def test_diverged_transcripts_are_chained(self):
+        def rec(uuid, parent, minute, **extra):
+            ts = f"2026-10-11T10:{minute:02}:00.000Z"
+            return json.dumps({"uuid": uuid, "parentUuid": parent, "timestamp": ts, **extra})
+
+        base = [rec("b1", None, 0), rec("b2", "b1", 1)]
+        # the remote tail started first, so it goes first and the local tail hangs off it;
+        # the local tail's compaction boundary is a root of its own and must stay one
+        theirs = [rec("r1", "b2", 2), rec("r2", "r1", 5)]
+        ours = [rec("l1", "b2", 3), rec("l2", "l1", 4), rec("l3", None, 6, logicalParentUuid="l2")]
+        self.write(self.local, self.transcript(U1), "\n".join(base + ours) + "\n")
+        self.write(self.remote, self.transcript(U1), "\n".join(base + theirs) + "\n")
+        self.assertIn("chaining tails", self.sync())
+
+        merged = self.read(self.local, self.transcript(U1))
+        self.assertEqual(merged, self.read(self.remote, self.transcript(U1)))
+        records = [json.loads(line) for line in merged.splitlines()]
+        self.assertEqual([r["uuid"] for r in records], ["b1", "b2", "r1", "r2", "l1", "l2", "l3"])
+        parents = {r["uuid"]: r["parentUuid"] for r in records}
+        self.assertEqual(parents["l1"], "r2")
+        self.assertIsNone(parents["l3"])
+        chain, u = [], "l2"
+        while u:
+            chain.append(u)
+            u = parents[u]
+        self.assertEqual(chain, ["l2", "l1", "r2", "r1", "b2", "b1"])
+
+        copies = sorted((self.local / "projects" / ENC).glob(f"{U1}.jsonl.conflict-*"))
+        self.assertEqual(len(copies), 2)
+        self.assertEqual(
+            {c.read_text() for c in copies},
+            {"\n".join(base + ours) + "\n", "\n".join(base + theirs) + "\n"},
+        )
+        self.assertNotRegex(self.sync("-n"), r"(?m)^merge ")
+
+    def test_diverged_and_open_is_skipped(self):
+        self.write(self.local, self.transcript(U1), "a\nX\n")
+        self.write(self.remote, self.transcript(U1), "a\nY\n")
+        self.mark_live(self.local, U1, "idle")
+        self.assertIn("diverged, but open on local", self.sync())
         self.assertEqual(self.read(self.local, self.transcript(U1)), "a\nX\n")
         self.assertEqual(self.read(self.remote, self.transcript(U1)), "a\nY\n")
 

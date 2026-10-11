@@ -362,12 +362,16 @@ def save_base(peer: str, me: str, files: dict, remote: Remote) -> None:
 # --------------------------------------------------------------------- plan
 
 
+DIVERGED = "diverged; chaining tails"
+
+
 def classify(local: dict, remote_: dict, base: dict, rels, remote: Remote) -> list[list]:
     """Return [action, rel, detail] for each path, ignoring liveness.
 
     Actions: same, push, pull, del-local, del-remote, conflict (keep both, save the
     remote copy locally), override (local wins, remote copy saved locally),
-    merge (MEMORY.md and history.jsonl: union of both), forget (gone on both sides).
+    merge (MEMORY.md and history.jsonl: union of both; diverged transcripts: tails
+    chained), forget (gone on both sides).
     """
     plan = []
     need_prefix = []  # append-only files where the remote copy is longer
@@ -392,16 +396,16 @@ def classify(local: dict, remote_: dict, base: dict, rels, remote: Remote) -> li
                 plan.append(["pull", rel, "changed there, deleted here"])
         elif L["hash"] == R["hash"]:
             plan.append(["same", rel, ""])
-        elif merger(rel):
-            plan.append(["merge", rel, "union"])
         elif kind == "append":
             if L["size"] > R["size"]:
                 ok = file_hash(claude_dir() / rel, R["size"]) == R["hash"]
-                plan.append(["push", rel, "fast-forward"] if ok else ["conflict", rel, "diverged"])
+                plan.append(["push", rel, "fast-forward"] if ok else ["merge", rel, DIVERGED])
             elif L["size"] < R["size"]:
                 need_prefix.append((rel, L["size"]))
             else:
-                plan.append(["conflict", rel, "diverged"])
+                plan.append(["merge", rel, DIVERGED])
+        elif merger(rel):
+            plan.append(["merge", rel, "union"])
         elif kind == "once":
             plan.append(["conflict", rel, "write-once file differs"])
         elif L["hash"] == B:
@@ -415,7 +419,7 @@ def classify(local: dict, remote_: dict, base: dict, rels, remote: Remote) -> li
         remote_prefix = remote.call("prefix", need_prefix)
         for rel, _ in need_prefix:
             ok = remote_prefix[rel] == local[rel]["hash"]
-            plan.append(["pull", rel, "fast-forward"] if ok else ["conflict", rel, "diverged"])
+            plan.append(["pull", rel, "fast-forward"] if ok else ["merge", rel, DIVERGED])
     plan.sort(key=lambda p: p[1])
     return plan
 
@@ -441,7 +445,7 @@ def apply_live(plan: list, local: dict, remote_: dict, live: dict, host: str) ->
         sid = session_of(rel)
         if sid is None or action in ("same", "forget"):
             continue
-        if action == "conflict":
+        if action in ("conflict", "merge"):  # both sides end up with a different file
             for side in ("local", host):
                 if sid in live[side]:
                     item[0], item[2] = "skip", f"diverged, but open on {side}"
@@ -578,12 +582,54 @@ def merge_index(ours: str, theirs: str) -> str:
     )
 
 
+def merge_transcript(ours: str, theirs: str) -> str:
+    """Two transcripts continued from a common prefix, as one chain: prefix, the
+    tail that started first, then the other tail hung off the first tail's tip.
+
+    claude --resume follows one parentUuid chain back from the tip the file's last
+    last-prompt record names, so tails left side by side would hide one of them. Records of the second tail
+    whose parent is in the prefix are its roots and are re-parented; compaction
+    boundaries (parentUuid null) are left alone. Raises ValueError if the files
+    are not transcripts that can be chained this way.
+    """
+    a, b = ours.splitlines(keepends=True), theirs.splitlines(keepends=True)
+    pairs = zip(a, b, strict=False)  # the tails differ in length
+    n = next((i for i, (x, y) in enumerate(pairs) if x != y), min(len(a), len(b)))
+    prefix, tails = a[:n], [a[n:], b[n:]]
+    try:
+        prefix_ids = {r.get("uuid") for r in map(json.loads, prefix)} - {None}
+        records = [[json.loads(line) for line in tail] for tail in tails]
+    except json.JSONDecodeError as e:
+        raise ValueError(f"not JSON lines: {e}") from None
+
+    def started(i):
+        # ISO timestamps sort as strings; the text breaks ties the same way on both machines
+        ts = next((r["timestamp"] for r in records[i] if "timestamp" in r), "")
+        return ts, "".join(tails[i])
+
+    first, second = sorted((0, 1), key=started)
+    tip = next((r["uuid"] for r in reversed(records[first]) if r.get("uuid")), None)
+    if tip is None:
+        raise ValueError("no message to chain onto")
+    out, chained = list(prefix) + tails[first], False
+    for line, r in zip(tails[second], records[second], strict=True):
+        if r.get("uuid") and r.get("parentUuid") in prefix_ids:
+            r["parentUuid"], chained = tip, True
+            line = json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n"
+        out.append(line)
+    if not chained:
+        raise ValueError("no message in the other tail starts from the shared prefix")
+    return "".join(out)
+
+
 def merger(rel: str):
     """The function that merges two versions of rel, or None if rel isn't merged."""
     if rel == HISTORY:
         return merge_history
     if rel.endswith("/memory/MEMORY.md"):
         return merge_index
+    if kind_of(rel) == "append":
+        return merge_transcript
     return None
 
 
@@ -619,12 +665,26 @@ def execute(plan: list, remote_: dict, remote: Remote) -> dict:
         # Re-read ours right before writing, so lines appended since the scan survive.
         ours = (root / rel).read_text()
         theirs = (staging / rel).read_text()
-        text = merger(rel)(ours, theirs)
-        write_atomic(root / rel, text)
-        merged[rel] = hashlib.sha256(text.encode()).hexdigest()
+        originals = {os.uname().nodename: ours, remote.host: theirs}
+        try:
+            text = merger(rel)(ours, theirs)
+        except ValueError as e:
+            print(f"claude-sync: can't chain {rel}: {e}; saving a conflict copy", file=sys.stderr)
+            originals = {remote.host: theirs}
+            text = None
+        if kind_of(rel) == "append":  # a rewritten transcript keeps both originals
+            for host, original in originals.items():
+                entry = {"hash": hashlib.sha256(original.encode()).hexdigest()}
+                copy = root / conflict_name(rel, host, entry)
+                if not copy.exists():
+                    copy.write_text(original)
+                    saves.append(rel)
+        if text is not None:
+            write_atomic(root / rel, text)
+            merged[rel] = hashlib.sha256(text.encode()).hexdigest()
     shutil.rmtree(staging, ignore_errors=True)
 
-    rsync(f"{root}/", remote.rsync_root(), get("push") + get("override") + get("merge"))
+    rsync(f"{root}/", remote.rsync_root(), get("push") + get("override") + list(merged))
     rsync(remote.rsync_root(), f"{root}/", get("pull"))
     trash(get("del-local"))
     if get("del-remote"):
@@ -632,7 +692,7 @@ def execute(plan: list, remote_: dict, remote: Remote) -> dict:
 
     print(
         f"done: pushed {len(get('push')) + len(get('override'))}, pulled {len(get('pull'))}, "
-        f"merged {len(get('merge'))}, deleted {len(get('del-local')) + len(get('del-remote'))}, "
+        f"merged {len(merged)}, deleted {len(get('del-local')) + len(get('del-remote'))}, "
         f"saved {len(saves)} conflict copies"
     )
     return merged
@@ -645,7 +705,7 @@ def new_base(plan: list, local: dict, remote_: dict, base: dict, merged: dict) -
             out[rel] = local[rel]["hash"]
         elif action == "pull":
             out[rel] = remote_[rel]["hash"]
-        elif action == "merge":
+        elif action == "merge" and rel in merged:
             out[rel] = merged[rel]
         elif action in ("del-local", "del-remote", "forget"):
             out.pop(rel, None)

@@ -110,7 +110,9 @@ sync(host, scope):
   work at the tip, and both machines build the same file. A tail's other
   roots (`/compact` boundaries, `parentUuid: null`) are left alone. Both
   originals are kept as `<name>.conflict-<host>-<hash8>` (`/resume` ignores
-  them; named by content, so a persisting conflict is saved once).
+  them; named by content, so a persisting conflict is saved once). Files that
+  can't be chained (not JSON, or no message in the other tail starts from the
+  shared prefix) get a conflict copy instead, reported on stderr.
 - **`history.jsonl`** is merged on every sync: union, sorted by `timestamp`,
   duplicates dropped.
 - **Version mismatch** between the two Claude installs prints a warning and the
@@ -126,8 +128,9 @@ sync(host, scope):
        idle-source snapshots; exclude `sessions-index.json`; version warning.
 3. [x] Sync base state file; three-way for mutable files; deletions and trash;
        `history.jsonl` merge; `--config`.
-4. [ ] Chain diverged tails automatically; `resolve <uuid> --keep
-       local|remote|merge` to undo an unwanted merge.
+4. [x] Chain diverged tails automatically. `resolve <uuid> --keep
+       local|remote|merge` is deferred: the `.conflict` copies undo a merge by
+       hand until a real case shows it's needed.
 5. [ ] Install to `~/.local/bin` on both machines; opt-in SessionEnd hook and
        `cs` wrapper.
 
