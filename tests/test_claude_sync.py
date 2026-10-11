@@ -475,6 +475,12 @@ class UnitTest(unittest.TestCase):
             with self.assertRaises(SystemExit, msg=rel):
                 claude_sync.check_paths([rel], "test")
 
+    def test_machine_ids_that_could_be_paths_are_refused(self):
+        self.assertEqual(claude_sync.check_machine_id("e8d5227c9b4f42", "test"), "e8d5227c9b4f42")
+        for mid in ("/home/ch/.claude/settings", "../x", "a/b", "", None):
+            with self.assertRaises(SystemExit, msg=mid):
+                claude_sync.check_machine_id(mid, "test")
+
     def test_rsync_does_not_copy_symlinks(self):
         with tempfile.TemporaryDirectory() as tmp:
             src, dst = Path(tmp) / "src", Path(tmp) / "dst"

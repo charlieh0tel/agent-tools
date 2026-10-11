@@ -21,6 +21,7 @@ import time
 from pathlib import Path, PurePosixPath
 
 UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+MACHINE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")  # it names files under state/
 CACHE = Path(
     os.environ.get("CLAUDE_SYNC_CACHE", Path.home() / ".cache" / "claude-sync" / "hash-cache.json")
 )
@@ -51,11 +52,17 @@ def machine_id() -> str:
     # The sync base is keyed by machine. Containers often have no machine-id, so the
     # tests (and anyone running there) can supply one.
     if override := os.environ.get("CLAUDE_SYNC_MACHINE_ID"):
-        return override
+        return check_machine_id(override, "CLAUDE_SYNC_MACHINE_ID")
     try:
-        return Path("/etc/machine-id").read_text().strip()
+        return check_machine_id(Path("/etc/machine-id").read_text().strip(), "/etc/machine-id")
     except FileNotFoundError:
         sys.exit("claude-sync: /etc/machine-id is missing; set CLAUDE_SYNC_MACHINE_ID")
+
+
+def check_machine_id(mid, source: str) -> str:
+    if not isinstance(mid, str) or not MACHINE_ID.fullmatch(mid):
+        sys.exit(f"claude-sync: refusing machine id {mid!r} from {source}")
+    return mid
 
 
 # ---------------------------------------------------------------- file kinds
@@ -830,7 +837,7 @@ def cmd_sync(args) -> None:
     local_scan = scan(scope)
     local, remote_ = local_scan["manifest"], remote_scan["manifest"]
     check_paths(remote_, args.host)
-    peer = remote_scan["machine"]
+    peer = check_machine_id(remote_scan["machine"], args.host)
     if peer == me and args.host != "@local":
         sys.exit(f"claude-sync: {args.host} is this machine")
     base = bases.get(peer, {})
