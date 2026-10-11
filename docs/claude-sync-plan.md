@@ -131,8 +131,8 @@ sync(host, scope):
 4. [x] Chain diverged tails automatically. `resolve <uuid> --keep
        local|remote|merge` is deferred: the `.conflict` copies undo a merge by
        hand until a real case shows it's needed.
-5. [ ] Install to `~/.local/bin` on both machines; opt-in SessionEnd hook and
-       `cs` wrapper.
+5. [x] Ship in the agent-tools package as `/usr/bin/claude-sync`.
+6. [ ] Opt-in SessionEnd hook and `cs` wrapper.
 
 ## Still to verify
 
