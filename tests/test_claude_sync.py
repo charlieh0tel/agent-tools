@@ -383,6 +383,15 @@ class UnitTest(unittest.TestCase):
             with self.assertRaises(SystemExit, msg=rel):
                 claude_sync.check_paths([rel], "test")
 
+    def test_rsync_does_not_copy_symlinks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dst = Path(tmp) / "src", Path(tmp) / "dst"
+            src.mkdir()
+            (Path(tmp) / "secret").write_text("secret\n")
+            (src / "link").symlink_to(Path(tmp) / "secret")
+            claude_sync.rsync(f"{src}/", f"{dst}/", ["link"])
+            self.assertFalse((dst / "link").exists() or (dst / "link").is_symlink())
+
 
 if __name__ == "__main__":
     unittest.main()

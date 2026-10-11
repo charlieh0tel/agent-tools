@@ -572,7 +572,9 @@ def rsync(src: str, dst: str, paths: list[str] | None = None, mkpath: bool = Fal
     """Copy src to dst; with paths, copy only those (relative to src)."""
     if paths is not None and not paths:
         return
-    cmd = ["rsync", "-a"] + (["--mkpath"] if mkpath else [])
+    # --no-links: claude-sync never syncs symlinks, and one planted by the peer would
+    # otherwise be read through when merging, sending back whatever it points at.
+    cmd = ["rsync", "-a", "--no-links"] + (["--mkpath"] if mkpath else [])
     if paths is not None:
         cmd += ["--files-from=-", "--from0"]
     r = subprocess.run([*cmd, src, dst], input="\0".join(paths or []).encode())
