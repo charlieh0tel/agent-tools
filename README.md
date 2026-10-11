@@ -53,4 +53,4 @@ sudo apt-get update && sudo apt-get install agent-tools
 ```
 
 Dev: `uv run ruff format && uv run ruff check && uv run pytest`.
-Deb: `dpkg-buildpackage -us -uc -b`; CI releases on `v*` tags.
+Deb: `dpkg-buildpackage -us -uc -b`; CI releases on `v*` tags (see [RELEASING.md](RELEASING.md)).
