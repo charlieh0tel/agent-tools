@@ -378,11 +378,14 @@ class SyncTest(unittest.TestCase):
 
 def rec(uuid, parent, minute, **extra):
     ts = f"2026-10-11T10:{minute:02}:00.000Z"
-    return json.dumps({"uuid": uuid, "parentUuid": parent, "timestamp": ts, **extra}) + "\n"
+    record = {"uuid": uuid, "parentUuid": parent, "timestamp": ts, **extra}
+    # unescaped non-ASCII, as Claude Code writes it
+    return json.dumps(record, ensure_ascii=False) + "\n"
 
 
 def chain(text):
-    return [(r.get("uuid"), r.get("parentUuid")) for r in map(json.loads, text.splitlines())]
+    lines = text.rstrip("\n").split("\n")  # not splitlines(): records may hold U+2028
+    return [(r.get("uuid"), r.get("parentUuid")) for r in map(json.loads, lines)]
 
 
 class UnitTest(unittest.TestCase):
@@ -408,6 +411,18 @@ class UnitTest(unittest.TestCase):
         )
         merged = claude_sync.merge_transcript(ours, base + rec("b", "p", 2))
         self.assertIn(("b", "a"), chain(merged))
+
+    def test_last_record_without_newline_stays_on_its_own_line(self):
+        base = rec("p", None, 0)
+        ours = base + rec("a", "p", 1).rstrip("\n")
+        merged = claude_sync.merge_transcript(ours, base + rec("b", "p", 2))
+        self.assertEqual(chain(merged), [("p", None), ("a", "p"), ("b", "a")])
+
+    def test_line_separator_inside_a_record_is_not_a_line_break(self):
+        base = rec("p", None, 0)
+        ours = base + rec("a", "p", 1, text="one\u2028two")
+        merged = claude_sync.merge_transcript(ours, base + rec("b", "p", 2))
+        self.assertEqual(chain(merged), [("p", None), ("a", "p"), ("b", "a")])
 
     def test_check_chain_refuses_duplicates_and_cycles(self):
         claude_sync.check_chain(

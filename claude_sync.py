@@ -609,10 +609,21 @@ def merge_index(ours: str, theirs: str) -> str:
     )
 
 
+def jsonl_lines(text: str) -> list[str]:
+    """Lines of a JSONL file, each ending in a newline. Split on \\n only: splitlines()
+    also breaks at U+2028 and friends, which JSON from JavaScript leaves unescaped in
+    strings. The last record may lack its newline, and appending another tail must not
+    run two records together."""
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    return [line + "\n" for line in lines]
+
+
 def split_transcripts(ours: str, theirs: str) -> tuple[list[str], set[str], list[list]]:
     """Split two transcripts where they first differ: the shared prefix's lines, the
     uuids in it, and each side's tail as [(line, record), ...]."""
-    a, b = ours.splitlines(keepends=True), theirs.splitlines(keepends=True)
+    a, b = map(jsonl_lines, (ours, theirs))
     pairs = zip(a, b, strict=False)  # the tails differ in length
     n = next((i for i, (x, y) in enumerate(pairs) if x != y), min(len(a), len(b)))
     try:
