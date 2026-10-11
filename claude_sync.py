@@ -173,11 +173,17 @@ def scope_roots(root: Path, scope: dict) -> list[Path]:
     return [*roots, root / HISTORY]
 
 
+def scan_failed(e: OSError):
+    # An unreadable file or directory must not look like a deleted one: that would
+    # trash the peer's copies. Stop instead.
+    sys.exit(f"claude-sync: can't scan {e.filename}: {e.strerror}; stopping")
+
+
 def walk(base: Path):
     if base.is_file():
         yield base
     elif base.is_dir():
-        for dirpath, _, names in os.walk(base):
+        for dirpath, _, names in os.walk(base, onerror=scan_failed):
             for name in names:
                 yield Path(dirpath) / name
 
@@ -190,17 +196,22 @@ def manifest(scope: dict) -> dict:
         for p in walk(base):
             if ".conflict-" in p.name or p.name in EXCLUDE or p.is_symlink():
                 continue
-            st = p.stat()
             rel = str(p.relative_to(root))
-            hit = cache.get(str(p))
-            if hit and hit[0] == st.st_size and hit[1] == st.st_mtime_ns:
-                digest = hit[2]
-            else:
-                digest = file_hash(p)
-                cache[str(p)] = [st.st_size, st.st_mtime_ns, digest]
-            entry = {"size": st.st_size, "hash": digest}
-            if kind_of(rel) == "append":
-                entry["complete"] = ends_with_newline(p, st.st_size)
+            try:
+                st = p.stat()
+                hit = cache.get(str(p))
+                if hit and hit[0] == st.st_size and hit[1] == st.st_mtime_ns:
+                    digest = hit[2]
+                else:
+                    digest = file_hash(p)
+                    cache[str(p)] = [st.st_size, st.st_mtime_ns, digest]
+                entry = {"size": st.st_size, "hash": digest}
+                if kind_of(rel) == "append":
+                    entry["complete"] = ends_with_newline(p, st.st_size)
+            except FileNotFoundError:
+                continue  # removed since the walk listed it: it is gone, as a deletion
+            except OSError as e:
+                scan_failed(e)
             out[rel] = entry
     save_cache(cache)
     return out

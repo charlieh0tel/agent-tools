@@ -167,6 +167,19 @@ class SyncTest(unittest.TestCase):
         self.assertIn("refusing unsafe path", self.sync(ok=False))
         self.assertFalse((self.remote / self.transcript(U1)).exists())
 
+    @unittest.skipIf(os.geteuid() == 0, "root reads unreadable directories")
+    def test_unreadable_directory_stops_the_sync(self):
+        rel = f"projects/{ENC}/memory/notes.md"
+        self.write(self.local, rel, "keep\n")
+        self.sync()
+        memory = self.local / "projects" / ENC / "memory"
+        memory.chmod(0)
+        try:
+            self.assertIn("can't scan", self.sync(ok=False))
+        finally:
+            memory.chmod(0o755)
+        self.assertEqual(self.read(self.remote, rel), "keep\n")
+
     def test_diverged_and_open_is_skipped(self):
         self.write(self.local, self.transcript(U1), "a\nX\n")
         self.write(self.remote, self.transcript(U1), "a\nY\n")
