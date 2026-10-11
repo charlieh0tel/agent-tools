@@ -1,12 +1,13 @@
 #!/usr/bin/make -f
-# A single stdlib-only script: install it directly rather than through
-# pybuild, so the package carries no Python packaging machinery.
+# Stdlib-only scripts: install them directly rather than through pybuild,
+# so the package carries no Python packaging machinery.
 
 %:
 	dh $@
 
 override_dh_auto_install:
 	install -D -m 0755 agent_ps.py debian/agent-tools/usr/bin/agent-ps
+	install -D -m 0755 claude_sync.py debian/agent-tools/usr/bin/claude-sync
 
 override_dh_auto_test:
 	python3 -m pytest tests

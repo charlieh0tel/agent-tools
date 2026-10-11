@@ -1,0 +1,84 @@
+.TH CLAUDE-SYNC 1 "2026-10-11" "agent-tools" "User Commands"
+.SH NAME
+claude-sync \- two-way sync of Claude Code sessions between machines
+.SH SYNOPSIS
+.B claude-sync sync
+.I host
+[\fB\-\-project\fR \fIDIR\fR | \fB\-\-all\fR] [\fB\-\-config\fR] [\fB\-n\fR] [\fB\-\-allow\-deletes\fR]
+.SH DESCRIPTION
+.B claude-sync
+syncs Claude Code sessions with
+.I host
+over
+.BR ssh (1)
+and
+.BR rsync (1),
+so a session started on one machine can be continued with
+.B claude \-\-resume
+on the other. Both machines must use the same home directory and project
+paths. The script sends itself to
+.I host
+on each run, so only
+.BR python3 ,
+.B rsync
+and
+.BR flock (1)
+need to be installed there.
+.PP
+Transcripts are append-only: the longer copy wins when the other is a prefix
+of it. When a session was continued on both machines, the two continuations are
+chained into one conversation and both originals are kept next to it as
+.IB name .conflict\- host \- hash
+files. Other files are compared against the state of the last sync with
+.IR host :
+a file changed on one side is copied, a file deleted on one side is moved to
+.I ~/.claude/claude\-sync/trash
+on the other, and a file changed on both sides keeps the local version and
+saves the remote one as a conflict copy.
+.I history.jsonl
+and memory indexes are merged.
+.PP
+Sessions open on the receiving side, or busy on the sending side, are skipped
+and reported with their pid and tmux pane.
+.SH OPTIONS
+.TP
+.BI \-\-project " DIR"
+Sync the sessions of the project in
+.I DIR
+(default: the current directory), plus
+.IR history.jsonl .
+.TP
+.B \-\-all
+Sync every project.
+.TP
+.B \-\-config
+Also sync
+.IR CLAUDE.md ,
+.IR settings.json ,
+.I keybindings.json
+and
+.IR skills/ .
+.TP
+.BR \-n ", " \-\-dry\-run
+Print the plan and change nothing.
+.TP
+.B \-\-allow\-deletes
+Allow a sync that deletes more than 20 files and more than a quarter of the
+files in scope; without it such a sync is refused.
+.SH ENVIRONMENT
+.TP
+.B CLAUDE_SYNC_MACHINE_ID
+Identifies this machine in the sync state when
+.I /etc/machine\-id
+is missing.
+.SH FILES
+.TP
+.I ~/.claude/claude\-sync/
+Lock, per-peer sync state, trash and staging, on each machine.
+.TP
+.I ~/.cache/claude\-sync/hash\-cache.json
+Cached file hashes.
+.SH SEE ALSO
+.BR agent\-ps (1),
+.BR rsync (1),
+.BR ssh (1)
