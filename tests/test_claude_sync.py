@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import claude_sync
 
@@ -482,6 +483,15 @@ class UnitTest(unittest.TestCase):
         for mid in ("/home/ch/.claude/settings", "../x", "a/b", "", None):
             with self.assertRaises(SystemExit, msg=mid):
                 claude_sync.check_machine_id(mid, "test")
+
+    def test_trashing_the_same_path_twice_keeps_both_copies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, CLAUDE_SYNC_DIR=tmp):
+                for text in ("first\n", "second\n"):  # within the same second
+                    (Path(tmp) / "f").write_text(text)
+                    claude_sync.trash(["f"])
+            kept = sorted(p.read_text() for p in Path(tmp).glob("claude-sync/trash/*/f"))
+            self.assertEqual(kept, ["first\n", "second\n"])
 
     def test_rsync_copies_a_file_whose_size_and_mtime_match(self):
         with tempfile.TemporaryDirectory() as tmp:

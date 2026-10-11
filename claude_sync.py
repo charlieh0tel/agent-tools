@@ -17,6 +17,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path, PurePosixPath
 
@@ -262,12 +263,20 @@ def purge_trash() -> None:
 
 
 def trash(rels: list[str]) -> None:
-    """Move files into trash/<timestamp>/, pruning directories left empty."""
+    """Move files into a new trash/<timestamp>-<random>/, pruning directories left empty.
+
+    Each call gets its own directory: a timestamp alone repeats within a second (or
+    after the clock steps back), and a second deletion would replace the first's copy.
+    """
     root = claude_dir()
-    dest = sync_dir() / "trash" / time.strftime("%Y%m%dT%H%M%S")
-    for rel in rels:
-        if (root / rel).exists():
-            os.renames(root / rel, dest / rel)
+    present = [rel for rel in rels if (root / rel).exists()]
+    if not present:
+        return
+    (sync_dir() / "trash").mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%dT%H%M%S-")
+    dest = Path(tempfile.mkdtemp(prefix=stamp, dir=sync_dir() / "trash"))
+    for rel in present:
+        os.renames(root / rel, dest / rel)
 
 
 def scan(scope: dict) -> dict:
