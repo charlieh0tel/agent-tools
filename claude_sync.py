@@ -14,6 +14,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -127,6 +128,17 @@ def ends_with_newline(path: Path, size: int) -> bool:
         return f.read(1) == b"\n"
 
 
+def write_file(path: Path, text: str, mode: int = 0o600) -> None:
+    """Replace path with text atomically. Owner-only by default, as Claude Code keeps
+    transcripts: they hold whole conversations, and the umask would make them public."""
+    tmp = path.with_name(path.name + ".claude-sync-tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    os.fchmod(fd, mode)  # a leftover tmp keeps its old mode through O_CREAT
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    tmp.replace(path)
+
+
 def load_cache() -> dict:
     try:
         return json.loads(CACHE.read_text())
@@ -136,9 +148,7 @@ def load_cache() -> dict:
 
 def save_cache(cache: dict) -> None:
     CACHE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CACHE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cache))
-    tmp.replace(CACHE)
+    write_file(CACHE, json.dumps(cache))
 
 
 def scope_roots(root: Path, scope: dict) -> list[Path]:
@@ -359,9 +369,7 @@ def save_base(peer: str, me: str, files: dict, remote: Remote) -> None:
     """Write the base locally, and the same content on the peer under our machine id."""
     p = state_path(peer)
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"files": files}, indent=0, sort_keys=True))
-    tmp.replace(p)
+    write_file(p, json.dumps({"files": files}, indent=0, sort_keys=True))
     rsync(str(p), f"{remote.rsync_root()}{SYNC}/state/{me}.json", mkpath=True)
 
 
@@ -639,12 +647,6 @@ def merger(rel: str):
     return None
 
 
-def write_atomic(path: Path, text: str) -> None:
-    tmp = path.with_name(path.name + ".claude-sync-tmp")
-    tmp.write_text(text)
-    tmp.replace(path)
-
-
 def execute(plan: list, remote_: dict, remote: Remote) -> dict:
     """Carry out the plan. Returns {rel: hash} for files whose content changed locally."""
     root = claude_dir()
@@ -683,10 +685,10 @@ def execute(plan: list, remote_: dict, remote: Remote) -> dict:
                 entry = {"hash": hashlib.sha256(original.encode()).hexdigest()}
                 copy = root / conflict_name(rel, host, entry)
                 if not copy.exists():
-                    copy.write_text(original)
+                    write_file(copy, original)
                     saves.append(rel)
         if text is not None:
-            write_atomic(root / rel, text)
+            write_file(root / rel, text, stat.S_IMODE((root / rel).stat().st_mode))
             merged[rel] = hashlib.sha256(text.encode()).hexdigest()
     shutil.rmtree(staging, ignore_errors=True)
 

@@ -127,6 +127,7 @@ class SyncTest(unittest.TestCase):
         ours = [rec("l1", "b2", 3), rec("l2", "l1", 4), rec("l3", None, 6, logicalParentUuid="l2")]
         self.write(self.local, self.transcript(U1), "\n".join(base + ours) + "\n")
         self.write(self.remote, self.transcript(U1), "\n".join(base + theirs) + "\n")
+        (self.local / self.transcript(U1)).chmod(0o600)
         self.assertIn("chaining tails", self.sync())
 
         merged = self.read(self.local, self.transcript(U1))
@@ -144,6 +145,9 @@ class SyncTest(unittest.TestCase):
 
         copies = sorted((self.local / "projects" / ENC).glob(f"{U1}.jsonl.conflict-*"))
         self.assertEqual(len(copies), 2)
+        # transcripts are owner-only; the merge and the copies must not widen that
+        for path in [*copies, self.local / self.transcript(U1), self.remote / self.transcript(U1)]:
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600, path)
         self.assertEqual(
             {c.read_text() for c in copies},
             {"\n".join(base + ours) + "\n", "\n".join(base + theirs) + "\n"},
