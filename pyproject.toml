@@ -9,7 +9,7 @@ dependencies = []
 agent-ps = "agent_ps:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff==0.16.10"]
 
 [build-system]
 requires = ["hatchling"]
@@ -19,6 +19,9 @@ build-backend = "hatchling.build"
 include = ["agent_ps.py"]
 
 [tool.ruff]
+# Pinned here and in the dev group: a new ruff can add rules or change
+# formatting, which should be a deliberate bump, not a surprise in CI.
+required-version = "==0.16.10"
 line-length = 100
 target-version = "py310"
 
