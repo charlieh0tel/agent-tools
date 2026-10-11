@@ -9,7 +9,7 @@ Homepage: https://github.com/charlieh0tel/agent-tools
 
 Package: agent-tools
 Architecture: all
-Depends: ${misc:Depends}, python3 (>= 3.10), procps, rsync, openssh-client
+Depends: ${misc:Depends}, python3 (>= 3.10), procps, rsync (>= 3.2.3), openssh-client
 Recommends: tmux
 Description: Small tools for working with coding agents
  agent-ps lists running Claude Code and Codex processes with their
