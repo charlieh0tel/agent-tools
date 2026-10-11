@@ -656,11 +656,18 @@ def merge_transcript(ours: str, theirs: str) -> str:
     claude --resume follows one parentUuid chain back from the tip the file's last
     last-prompt record names, so tails left side by side would hide one of them.
     Records of the second tail whose parent is in the prefix are its roots and are
-    re-parented; compaction boundaries (parentUuid null) are left alone. Raises
-    ValueError if the files are not transcripts that can be chained this way.
+    re-parented; compaction boundaries (parentUuid null) are left alone, and a
+    compacted tail goes first. Raises ValueError if the files are not transcripts
+    that can be chained this way.
     """
     prefix, prefix_ids, tails = split_transcripts(ours, theirs)
-    first, second = sorted(tails, key=tail_start)
+    # --resume stops at a compaction boundary, so a compacted tail must go first: the
+    # other one then hangs off its end. If both were compacted, one is always lost.
+    compacted = [any(r.get("subtype") == "compact_boundary" for _, r in t) for t in tails]
+    if all(compacted):
+        raise ValueError("both sides were compacted")
+    order = sorted((0, 1), key=lambda i: (not compacted[i], tail_start(tails[i])))
+    first, second = (tails[i] for i in order)
     tip = tail_tip(first)
     if tip is None:
         raise ValueError("no message to chain onto")

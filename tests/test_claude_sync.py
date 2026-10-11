@@ -429,6 +429,21 @@ class UnitTest(unittest.TestCase):
         merged = claude_sync.merge_history(line + "\n", json.dumps({"timestamp": 1}) + "\n")
         self.assertEqual(merged.rstrip("\n").split("\n")[1], line)
 
+    def test_compacted_tail_goes_first(self):
+        base = rec("p", None, 0)
+        ours = base + rec("a", "p", 1)  # started first, but not compacted
+        boundary = rec("c", None, 3, subtype="compact_boundary", logicalParentUuid="b")
+        theirs = base + rec("b", "p", 2) + boundary + rec("d", "c", 4)
+        merged = chain(claude_sync.merge_transcript(ours, theirs))
+        self.assertEqual(merged[-1], ("a", "d"))  # resuming from a reaches d, then c
+
+    def test_both_tails_compacted_is_refused(self):
+        base = rec("p", None, 0)
+        ours = base + rec("a", "p", 1) + rec("c", None, 2, subtype="compact_boundary")
+        theirs = base + rec("b", "p", 3) + rec("e", None, 4, subtype="compact_boundary")
+        with self.assertRaisesRegex(ValueError, "compacted"):
+            claude_sync.merge_transcript(ours, theirs)
+
     def test_check_chain_refuses_duplicates_and_cycles(self):
         claude_sync.check_chain(
             [{"uuid": "a", "parentUuid": None}, {"uuid": "b", "parentUuid": "a"}]
