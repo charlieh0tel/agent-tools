@@ -284,6 +284,18 @@ class SyncTest(unittest.TestCase):
             self.assertEqual(len(states), 1, side)
             self.assertIn(self.transcript(U1), json.loads(states[0].read_text())["files"])
 
+    @unittest.skipIf(os.geteuid() == 0, "root writes read-only directories")
+    def test_failed_state_push_leaves_both_bases_unchanged(self):
+        state = self.remote / "claude-sync" / "state"
+        state.mkdir(parents=True)
+        state.chmod(0o500)
+        self.write(self.local, self.transcript(U1), "a\n")
+        try:
+            self.sync(ok=False)
+        finally:
+            state.chmod(0o700)
+        self.assertEqual(list((self.local / "claude-sync" / "state").glob("*.json")), [])
+
     def test_first_sync_never_deletes(self):
         self.write(self.remote, self.transcript(U1), "a\n")
         out = self.sync()

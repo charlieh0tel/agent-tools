@@ -422,11 +422,20 @@ def load_base(peer: str) -> dict:
 
 
 def save_base(peer: str, me: str, files: dict, remote: Remote) -> None:
-    """Write the base locally, and the same content on the peer under our machine id."""
+    """Write the base on the peer, under our machine id, and then here.
+
+    Peer first: if that push fails, neither side's base has moved, and the next sync
+    compares both against the same older base. Ours advancing alone would let a
+    later edit on the peer be taken as unchanged and overwritten.
+    """
+    body = json.dumps({"files": files}, indent=0, sort_keys=True)
     p = state_path(peer)
     p.parent.mkdir(parents=True, exist_ok=True)
-    write_file(p, json.dumps({"files": files}, indent=0, sort_keys=True))
-    rsync(str(p), f"{remote.rsync_root()}{SYNC}/state/{me}.json", mkpath=True)
+    with tempfile.TemporaryDirectory(dir=p.parent) as d:
+        outgoing = Path(d) / f"{me}.json"
+        write_file(outgoing, body)
+        rsync(str(outgoing), f"{remote.rsync_root()}{SYNC}/state/{me}.json", mkpath=True)
+    write_file(p, body)
 
 
 # --------------------------------------------------------------------- plan
