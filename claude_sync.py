@@ -648,15 +648,42 @@ def merge_transcript(ours: str, theirs: str) -> str:
     tip = tail_tip(first)
     if tip is None:
         raise ValueError("no message to chain onto")
-    out, chained = prefix + [line for line, _ in first], False
+    out, related = prefix + [line for line, _ in first], False
+    # A sync interrupted after writing a merge locally leaves the merge on one side
+    # only; merging it again must not add the other tail a second time.
+    have_lines = {line for line, _ in first}
+    have_ids = {r.get("uuid") for _, r in first} - {None}
     for line, r in second:
+        if line in have_lines or r.get("uuid") in have_ids:
+            related = True
+            continue
         if r.get("uuid") and r.get("parentUuid") in prefix_ids:
-            r["parentUuid"], chained = tip, True
+            r["parentUuid"], related = tip, True
             line = json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n"
         out.append(line)
-    if not chained:
+    if not related:
         raise ValueError("no message in the other tail starts from the shared prefix")
+    check_chain(json.loads(line) for line in out)
     return "".join(out)
+
+
+def check_chain(records) -> None:
+    """Raise ValueError unless every uuid is unique and no parentUuid chain loops."""
+    parents = {}
+    for r in records:
+        if uuid := r.get("uuid"):
+            if uuid in parents:
+                raise ValueError(f"duplicate uuid {uuid}")
+            parents[uuid] = r.get("parentUuid")
+    acyclic = set()
+    for uuid in parents:
+        path = {}  # a dict: ordered like a list, but O(1) membership on long chains
+        while uuid in parents and uuid not in acyclic:
+            if uuid in path:
+                raise ValueError(f"parentUuid cycle through {uuid}")
+            path[uuid] = None
+            uuid = parents[uuid]
+        acyclic.update(path)
 
 
 def merger(rel: str):

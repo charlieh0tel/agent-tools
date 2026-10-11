@@ -376,7 +376,38 @@ class SyncTest(unittest.TestCase):
         self.assertFalse(old.exists())
 
 
+def rec(uuid, parent, minute, **extra):
+    ts = f"2026-10-11T10:{minute:02}:00.000Z"
+    return json.dumps({"uuid": uuid, "parentUuid": parent, "timestamp": ts, **extra}) + "\n"
+
+
+def chain(text):
+    return [(r.get("uuid"), r.get("parentUuid")) for r in map(json.loads, text.splitlines())]
+
+
 class UnitTest(unittest.TestCase):
+    def test_merging_again_after_an_interrupted_sync_changes_nothing(self):
+        base = rec("p", None, 0)
+        ours, theirs = base + rec("a", "p", 1), base + rec("b", "p", 2)
+        merged = claude_sync.merge_transcript(ours, theirs)
+        self.assertEqual(chain(merged), [("p", None), ("a", "p"), ("b", "a")])
+        # the push failed, so the peer still has its own tail, perhaps grown since
+        self.assertEqual(claude_sync.merge_transcript(merged, theirs), merged)
+        grown = claude_sync.merge_transcript(merged, theirs + rec("c", "b", 3))
+        self.assertEqual(chain(grown), [("p", None), ("a", "p"), ("b", "a"), ("c", "b")])
+
+    def test_check_chain_refuses_duplicates_and_cycles(self):
+        claude_sync.check_chain(
+            [{"uuid": "a", "parentUuid": None}, {"uuid": "b", "parentUuid": "a"}]
+        )
+        for records in (
+            [{"uuid": "a", "parentUuid": None}, {"uuid": "a", "parentUuid": None}],
+            [{"uuid": "a", "parentUuid": "b"}, {"uuid": "b", "parentUuid": "a"}],
+            [{"uuid": "a", "parentUuid": "a"}],
+        ):
+            with self.assertRaises(ValueError, msg=records):
+                claude_sync.check_chain(records)
+
     def test_check_paths_refuses_escapes(self):
         claude_sync.check_paths([f"projects/{ENC}/{U1}.jsonl", "history.jsonl"], "test")
         for rel in ("../x", "/etc/passwd", f"projects/{ENC}/../../x", ""):
