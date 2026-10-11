@@ -1,6 +1,6 @@
 [project]
 name = "agent-tools"
-version = "1.1.2"
+dynamic = ["version"]
 description = "Small CLI tools for working with coding agents (Claude Code, Codex)"
 requires-python = ">=3.10"
 dependencies = []
@@ -31,3 +31,12 @@ select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM", "PIE", "RUF"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.hatch.version]
+# debian/changelog is the one place a release sets the version.
+path = "debian/changelog"
+pattern = "^agent-tools \\((?P<version>[^)]+)\\)"
+
+[tool.uv]
+# Rebuild the project when the changelog, which holds its version, changes.
+cache-keys = [{ file = "pyproject.toml" }, { file = "debian/changelog" }]
