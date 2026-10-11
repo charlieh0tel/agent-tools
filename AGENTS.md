@@ -6,8 +6,10 @@
 - Write simple, idiomatic Python with focused functions, meaningful names, and type hints on interfaces. Avoid magic constants and redundant comments.
 - Prefer ASCII and US spelling. Keep documentation and tracked TODOs current with changes.
 - Use `uv` for dependencies and environments; run tools with `uv run`. Discuss new dependencies before adding them.
-- Catch specific exceptions; never silently swallow errors. Keep secrets out of code and logs.
+- Catch specific exceptions; never silently swallow errors. Log anything skipped to stderr: "could not check" must never look the same as "nothing found". Keep secrets out of code and logs.
 - Add deterministic tests for behavior changes and regressions, including relevant edge cases.
 - After code changes and before commits, run `uv run ruff format`, `uv run ruff check`, `uv run pytest`, and any configured type checks. Fix failures before committing.
 - Commit only when authorized. Stage files explicitly by name; never use `git add -A` or `git commit -a`.
 - Keep commits and PRs to one functional change, with concise messages explaining purpose and relevant validation.
+- For any major change, do a refactor and commit first. If that seems unnecessary, say so and ask before skipping it.
+- Pin every `uses:` in workflows to a full commit SHA with the tag in a comment. Never pipe a remote script into a shell.
