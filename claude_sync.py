@@ -261,9 +261,8 @@ class Remote:
     def _fail(self, what: str, code: int, stderr: bytes):
         err = stderr.decode(errors="replace").strip()
         if code == 255 and self.host != "@local":
-            sys.exit(
-                f"claude-sync: can't reach {self.host}: {err.splitlines()[-1] if err else 'ssh failed'}"
-            )
+            last = err.splitlines()[-1] if err else "ssh failed"
+            sys.exit(f"claude-sync: can't reach {self.host}: {last}")
         sys.exit(f"claude-sync: {self.host}: {what} failed (exit {code}): {err}")
 
     def call(self, op: str, arg) -> dict:
@@ -587,10 +586,10 @@ def merge_transcript(ours: str, theirs: str) -> str:
     tail that started first, then the other tail hung off the first tail's tip.
 
     claude --resume follows one parentUuid chain back from the tip the file's last
-    last-prompt record names, so tails left side by side would hide one of them. Records of the second tail
-    whose parent is in the prefix are its roots and are re-parented; compaction
-    boundaries (parentUuid null) are left alone. Raises ValueError if the files
-    are not transcripts that can be chained this way.
+    last-prompt record names, so tails left side by side would hide one of them.
+    Records of the second tail whose parent is in the prefix are its roots and are
+    re-parented; compaction boundaries (parentUuid null) are left alone. Raises
+    ValueError if the files are not transcripts that can be chained this way.
     """
     a, b = ours.splitlines(keepends=True), theirs.splitlines(keepends=True)
     pairs = zip(a, b, strict=False)  # the tails differ in length
