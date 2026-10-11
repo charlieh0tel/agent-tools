@@ -1,3 +1,12 @@
+agent-tools (1.1.0) unstable; urgency=low
+
+  * claude-sync: new tool. Two-way sync of Claude Code sessions between two
+    machines over ssh and rsync, so a session can be resumed on either one.
+    A session continued on both machines is chained into one conversation,
+    with both originals kept as conflict copies.
+
+ -- Christopher Hoover <ch@murgatroid.com>  Sun, 11 Oct 2026 10:49:36 -0700
+
 agent-tools (1.0.1) unstable; urgency=low
 
   * agent-ps: keep INFO on one row and cut it to the terminal width; a prompt
