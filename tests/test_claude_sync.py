@@ -481,6 +481,16 @@ class UnitTest(unittest.TestCase):
             with self.assertRaises(SystemExit, msg=mid):
                 claude_sync.check_machine_id(mid, "test")
 
+    def test_rsync_copies_a_file_whose_size_and_mtime_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dst = Path(tmp) / "src", Path(tmp) / "dst"
+            for side, text in ((src, "new\n"), (dst, "old\n")):
+                side.mkdir()
+                (side / "f").write_text(text)
+                os.utime(side / "f", (1_000_000_000, 1_000_000_000))
+            claude_sync.rsync(f"{src}/", f"{dst}/", ["f"])
+            self.assertEqual((dst / "f").read_text(), "new\n")
+
     def test_rsync_does_not_copy_symlinks(self):
         with tempfile.TemporaryDirectory() as tmp:
             src, dst = Path(tmp) / "src", Path(tmp) / "dst"
