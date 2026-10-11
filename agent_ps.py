@@ -287,7 +287,7 @@ def collect(
             continue
         cwd = cwd_of(p.pid)
         if cwd is None and not show_tree:
-            cwd = next((c for c in map(lambda k: cwd_of(k.pid), same_kind_children(p)) if c), None)
+            cwd = next((c for k in same_kind_children(p) if (c := cwd_of(k.pid))), None)
         agent = Agent(
             kind=kind,
             pid=p.pid,
