@@ -609,6 +609,30 @@ def merge_index(ours: str, theirs: str) -> str:
     )
 
 
+def split_transcripts(ours: str, theirs: str) -> tuple[list[str], set[str], list[list]]:
+    """Split two transcripts where they first differ: the shared prefix's lines, the
+    uuids in it, and each side's tail as [(line, record), ...]."""
+    a, b = ours.splitlines(keepends=True), theirs.splitlines(keepends=True)
+    pairs = zip(a, b, strict=False)  # the tails differ in length
+    n = next((i for i, (x, y) in enumerate(pairs) if x != y), min(len(a), len(b)))
+    try:
+        prefix_ids = {r.get("uuid") for r in map(json.loads, a[:n])} - {None}
+        tails = [[(line, json.loads(line)) for line in lines] for lines in (a[n:], b[n:])]
+    except json.JSONDecodeError as e:
+        raise ValueError(f"not JSON lines: {e}") from None
+    return a[:n], prefix_ids, tails
+
+
+def tail_start(tail: list) -> tuple[str, str]:
+    # ISO timestamps sort as strings; the text breaks ties the same way on both machines
+    ts = next((r["timestamp"] for _, r in tail if "timestamp" in r), "")
+    return ts, "".join(line for line, _ in tail)
+
+
+def tail_tip(tail: list) -> str | None:
+    return next((r["uuid"] for _, r in reversed(tail) if r.get("uuid")), None)
+
+
 def merge_transcript(ours: str, theirs: str) -> str:
     """Two transcripts continued from a common prefix, as one chain: prefix, the
     tail that started first, then the other tail hung off the first tail's tip.
@@ -619,27 +643,13 @@ def merge_transcript(ours: str, theirs: str) -> str:
     re-parented; compaction boundaries (parentUuid null) are left alone. Raises
     ValueError if the files are not transcripts that can be chained this way.
     """
-    a, b = ours.splitlines(keepends=True), theirs.splitlines(keepends=True)
-    pairs = zip(a, b, strict=False)  # the tails differ in length
-    n = next((i for i, (x, y) in enumerate(pairs) if x != y), min(len(a), len(b)))
-    prefix, tails = a[:n], [a[n:], b[n:]]
-    try:
-        prefix_ids = {r.get("uuid") for r in map(json.loads, prefix)} - {None}
-        records = [[json.loads(line) for line in tail] for tail in tails]
-    except json.JSONDecodeError as e:
-        raise ValueError(f"not JSON lines: {e}") from None
-
-    def started(i):
-        # ISO timestamps sort as strings; the text breaks ties the same way on both machines
-        ts = next((r["timestamp"] for r in records[i] if "timestamp" in r), "")
-        return ts, "".join(tails[i])
-
-    first, second = sorted((0, 1), key=started)
-    tip = next((r["uuid"] for r in reversed(records[first]) if r.get("uuid")), None)
+    prefix, prefix_ids, tails = split_transcripts(ours, theirs)
+    first, second = sorted(tails, key=tail_start)
+    tip = tail_tip(first)
     if tip is None:
         raise ValueError("no message to chain onto")
-    out, chained = list(prefix) + tails[first], False
-    for line, r in zip(tails[second], records[second], strict=True):
+    out, chained = prefix + [line for line, _ in first], False
+    for line, r in second:
         if r.get("uuid") and r.get("parentUuid") in prefix_ids:
             r["parentUuid"], chained = tip, True
             line = json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n"
