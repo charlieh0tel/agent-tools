@@ -18,7 +18,7 @@ import stat
 import subprocess
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 CACHE = Path(
@@ -137,6 +137,15 @@ def write_file(path: Path, text: str, mode: int = 0o600) -> None:
     with os.fdopen(fd, "w") as f:
         f.write(text)
     tmp.replace(path)
+
+
+def check_paths(rels, source: str) -> None:
+    """Refuse paths that would leave ~/.claude. Only a broken or hostile peer sends them,
+    so stop rather than skip: nothing else it says can be trusted either."""
+    for rel in rels:
+        parts = PurePosixPath(rel).parts
+        if not parts or parts[0] == "/" or ".." in parts:
+            sys.exit(f"claude-sync: refusing unsafe path {rel!r} from {source}")
 
 
 def load_cache() -> dict:
@@ -332,8 +341,10 @@ def remote_main(op: str, arg: str) -> None:
     if op == "scan":
         result = scan(arg)
     elif op == "prefix":
+        check_paths((rel for rel, _ in arg), "the syncing machine")
         result = prefix_hashes(arg)
     elif op == "trash":
+        check_paths(arg, "the syncing machine")
         result = trash(arg)
     else:
         sys.exit(f"unknown remote op {op}")
@@ -736,6 +747,8 @@ def cmd_sync(args) -> None:
     # The peer's machine id is only known after its scan, but its base lists
     # sessions we must scan for, so scan the remote first with every known uuid.
     bases = {p.stem: load_base(p.stem) for p in (sync_dir() / "state").glob("*.json")}
+    for peer_id, b in bases.items():  # peers write these files too
+        check_paths(b, f"sync state for {peer_id}")
     known = (
         set().union(*(project_sessions(project, b) for b in bases.values())) if project else set()
     )
@@ -743,6 +756,7 @@ def cmd_sync(args) -> None:
     remote_scan = remote.call("scan", scope)
     local_scan = scan(scope)
     local, remote_ = local_scan["manifest"], remote_scan["manifest"]
+    check_paths(remote_, args.host)
     peer = remote_scan["machine"]
     if peer == me and args.host != "@local":
         sys.exit(f"claude-sync: {args.host} is this machine")

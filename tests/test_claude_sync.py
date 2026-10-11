@@ -1,4 +1,5 @@
-"""End-to-end tests: two scratch ~/.claude dirs synced through the @local test host."""
+"""Tests for claude-sync, mostly end to end: two scratch ~/.claude dirs synced through
+the @local test host."""
 
 import json
 import os
@@ -8,6 +9,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+import claude_sync
 
 SCRIPT = Path(__file__).resolve().parent.parent / "claude_sync.py"
 PROJECT_DIR = "/home/test/src/demo"
@@ -153,6 +156,16 @@ class SyncTest(unittest.TestCase):
             {"\n".join(base + ours) + "\n", "\n".join(base + theirs) + "\n"},
         )
         self.assertNotRegex(self.sync("-n"), r"(?m)^merge ")
+
+    def test_unsafe_path_in_sync_state_is_refused(self):
+        self.write(
+            self.local,
+            "claude-sync/state/test-machine.json",
+            json.dumps({"files": {f"projects/{ENC}/../../../escape": "0"}}),
+        )
+        self.write(self.local, self.transcript(U1), "a\n")
+        self.assertIn("refusing unsafe path", self.sync(ok=False))
+        self.assertFalse((self.remote / self.transcript(U1)).exists())
 
     def test_diverged_and_open_is_skipped(self):
         self.write(self.local, self.transcript(U1), "a\nX\n")
@@ -361,6 +374,14 @@ class SyncTest(unittest.TestCase):
         self.write(self.local, self.transcript(U1), "a\n")
         self.sync("-n")
         self.assertFalse(old.exists())
+
+
+class UnitTest(unittest.TestCase):
+    def test_check_paths_refuses_escapes(self):
+        claude_sync.check_paths([f"projects/{ENC}/{U1}.jsonl", "history.jsonl"], "test")
+        for rel in ("../x", "/etc/passwd", f"projects/{ENC}/../../x", ""):
+            with self.assertRaises(SystemExit, msg=rel):
+                claude_sync.check_paths([rel], "test")
 
 
 if __name__ == "__main__":
