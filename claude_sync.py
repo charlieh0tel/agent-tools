@@ -234,12 +234,29 @@ def proc_start(pid: int) -> str | None:
     return stat.rsplit(")", 1)[1].split()[19]
 
 
+def read_session(f: Path) -> dict | None:
+    """A sessions/<pid>.json record, or None if the session has ended. Claude rewrites
+    these as a session goes busy and idle, so a bad read is retried; one that stays
+    bad stops the sync, since skipping it would treat a running session as closed."""
+    for _ in range(3):
+        try:
+            s = json.loads(f.read_text())
+        except FileNotFoundError:
+            return None
+        except (json.JSONDecodeError, OSError) as e:
+            err = e
+        else:
+            if isinstance(s, dict):
+                return s
+            err = "not a JSON object"
+        time.sleep(0.1)
+    sys.exit(f"claude-sync: can't read {f}: {err}; can't tell which sessions are running")
+
+
 def live_sessions() -> dict:
     live = {}
     for f in (claude_dir() / "sessions").glob("*.json"):
-        try:
-            s = json.loads(f.read_text())
-        except (json.JSONDecodeError, OSError):
+        if (s := read_session(f)) is None:
             continue
         if "pid" in s and proc_start(s["pid"]) == s.get("procStart"):
             live[s["sessionId"]] = {k: s.get(k) for k in ("pid", "status", "tmux", "name", "cwd")}

@@ -189,6 +189,12 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(self.read(self.local, self.transcript(U1)), "a\nX\n")
         self.assertEqual(self.read(self.remote, self.transcript(U1)), "a\nY\n")
 
+    def test_unreadable_session_file_stops_the_sync(self):
+        self.write(self.local, self.transcript(U1), "a\n")
+        self.write(self.local, "sessions/123.json", '{"pid": 12')
+        self.assertIn("can't tell which sessions are running", self.sync(ok=False))
+        self.assertFalse((self.remote / self.transcript(U1)).exists())
+
     def test_open_on_receiving_side_is_skipped(self):
         self.write(self.local, self.transcript(U1), "a\nb\n")
         self.write(self.remote, self.transcript(U1), "a\n")
