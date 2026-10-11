@@ -271,7 +271,6 @@ def trash(rels: list[str]) -> None:
 
 
 def scan(scope: dict) -> dict:
-    purge_trash()
     return {
         "manifest": manifest(scope),
         "live": live_sessions(),
@@ -364,6 +363,8 @@ def remote_main(op: str, arg: str) -> None:
     elif op == "trash":
         check_paths(arg, "the syncing machine")
         result = trash(arg)
+    elif op == "purge":
+        result = purge_trash()
     else:
         sys.exit(f"unknown remote op {op}")
     json.dump(result, sys.stdout)
@@ -824,6 +825,9 @@ def cmd_sync(args) -> None:
     if not args.dry_run:
         local_lock = lock_local()
         remote.lock()
+        # Under the locks, and never on a dry run: purging deletes recovery copies.
+        purge_trash()
+        remote.call("purge", None)
 
     me = machine_id()
     # The peer's machine id is only known after its scan, but its base lists

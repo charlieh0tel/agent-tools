@@ -386,6 +386,8 @@ class SyncTest(unittest.TestCase):
         os.utime(old, (0, 0))
         self.write(self.local, self.transcript(U1), "a\n")
         self.sync("-n")
+        self.assertTrue(old.exists(), "a dry run must not delete recovery copies")
+        self.sync()
         self.assertFalse(old.exists())
 
 
