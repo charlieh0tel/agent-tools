@@ -396,6 +396,19 @@ class UnitTest(unittest.TestCase):
         grown = claude_sync.merge_transcript(merged, theirs + rec("c", "b", 3))
         self.assertEqual(chain(grown), [("p", None), ("a", "p"), ("b", "a"), ("c", "b")])
 
+    def test_second_tail_hangs_off_the_resumed_leaf(self):
+        base = rec("p", None, 0)
+        # x was written after a, but last-prompt says --resume continues from a
+        ours = (
+            base
+            + rec("a", "p", 1)
+            + rec("x", "p", 1)
+            + json.dumps({"type": "last-prompt", "leafUuid": "a"})
+            + "\n"
+        )
+        merged = claude_sync.merge_transcript(ours, base + rec("b", "p", 2))
+        self.assertIn(("b", "a"), chain(merged))
+
     def test_check_chain_refuses_duplicates_and_cycles(self):
         claude_sync.check_chain(
             [{"uuid": "a", "parentUuid": None}, {"uuid": "b", "parentUuid": "a"}]

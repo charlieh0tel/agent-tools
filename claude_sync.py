@@ -630,7 +630,12 @@ def tail_start(tail: list) -> tuple[str, str]:
 
 
 def tail_tip(tail: list) -> str | None:
-    return next((r["uuid"] for _, r in reversed(tail) if r.get("uuid")), None)
+    """Where --resume would continue this tail: the leaf its last last-prompt record
+    names, which need not be the last record written; else its last record."""
+    ids = [r["uuid"] for _, r in tail if r.get("uuid")]
+    prompts = [r for _, r in tail if r.get("type") == "last-prompt"]
+    leaf = prompts[-1].get("leafUuid") if prompts else None
+    return leaf if leaf in ids else next(reversed(ids), None)
 
 
 def merge_transcript(ours: str, theirs: str) -> str:
