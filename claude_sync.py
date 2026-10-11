@@ -585,7 +585,7 @@ def rsync(src: str, dst: str, paths: list[str] | None = None, mkpath: bool = Fal
 def merge_history(ours: str, theirs: str) -> str:
     """Union of two prompt histories, sorted by timestamp, exact duplicates dropped."""
     seen, entries = set(), []
-    for line in ours.splitlines() + theirs.splitlines():
+    for line in ours.split("\n") + theirs.split("\n"):  # see jsonl_lines on splitlines()
         if not line.strip() or line in seen:
             continue
         seen.add(line)
@@ -600,8 +600,8 @@ def merge_history(ours: str, theirs: str) -> str:
 
 def merge_index(ours: str, theirs: str) -> str:
     """MEMORY.md: our lines in order, then any of theirs we don't have."""
-    have = set(ours.splitlines())
-    extra = [line for line in theirs.splitlines() if line.strip() and line not in have]
+    have = set(ours.split("\n"))
+    extra = [line for line in theirs.split("\n") if line.strip() and line not in have]
     return (
         ours
         + ("" if not ours or ours.endswith("\n") else "\n")

@@ -424,6 +424,11 @@ class UnitTest(unittest.TestCase):
         merged = claude_sync.merge_transcript(ours, base + rec("b", "p", 2))
         self.assertEqual(chain(merged), [("p", None), ("a", "p"), ("b", "a")])
 
+    def test_history_merge_keeps_line_separators_inside_prompts(self):
+        line = json.dumps({"display": "one\u2028two", "timestamp": 2}, ensure_ascii=False)
+        merged = claude_sync.merge_history(line + "\n", json.dumps({"timestamp": 1}) + "\n")
+        self.assertEqual(merged.rstrip("\n").split("\n")[1], line)
+
     def test_check_chain_refuses_duplicates_and_cycles(self):
         claude_sync.check_chain(
             [{"uuid": "a", "parentUuid": None}, {"uuid": "b", "parentUuid": "a"}]
