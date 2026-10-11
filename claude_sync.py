@@ -47,7 +47,14 @@ def encode(cwd: str) -> str:
 
 
 def machine_id() -> str:
-    return Path("/etc/machine-id").read_text().strip()
+    # The sync base is keyed by machine. Containers often have no machine-id, so the
+    # tests (and anyone running there) can supply one.
+    if override := os.environ.get("CLAUDE_SYNC_MACHINE_ID"):
+        return override
+    try:
+        return Path("/etc/machine-id").read_text().strip()
+    except FileNotFoundError:
+        sys.exit("claude-sync: /etc/machine-id is missing; set CLAUDE_SYNC_MACHINE_ID")
 
 
 # ---------------------------------------------------------------- file kinds

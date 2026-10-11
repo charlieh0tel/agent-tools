@@ -28,7 +28,10 @@ class SyncTest(unittest.TestCase):
             (side / "projects" / ENC).mkdir(parents=True)
             (side / "sessions").mkdir()
         self.env = dict(
-            os.environ, CLAUDE_SYNC_DIR=str(self.local), CLAUDE_SYNC_CACHE=str(base / "cache.json")
+            os.environ,
+            CLAUDE_SYNC_DIR=str(self.local),
+            CLAUDE_SYNC_CACHE=str(base / "cache.json"),
+            CLAUDE_SYNC_MACHINE_ID="test-machine",
         )
 
     def tearDown(self):
