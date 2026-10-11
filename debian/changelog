@@ -1,3 +1,13 @@
+agent-tools (1.1.1) unstable; urgency=medium
+
+  * claude-sync: write merged transcripts, conflict copies and its own state
+    owner-only (0600); they were created with the umask and could be read by
+    other users.
+  * claude-sync: refuse file paths from the peer that would leave ~/.claude,
+    and never copy symlinks.
+
+ -- Christopher Hoover <ch@murgatroid.com>  Sun, 11 Oct 2026 10:57:49 -0700
+
 agent-tools (1.1.0) unstable; urgency=low
 
   * claude-sync: new tool. Two-way sync of Claude Code sessions between two
