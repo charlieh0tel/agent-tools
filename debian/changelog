@@ -9,6 +9,9 @@ agent-tools (1.1.2) unstable; urgency=medium
   * claude-sync: chain diverged transcripts onto the leaf --resume continues
     from, put a compacted tail first, split on newlines only, and make
     re-merging idempotent.
+  * claude-sync: merge history.jsonl and MEMORY.md on newlines only; a prompt
+    containing U+2028 was split in two and corrupted the history on both
+    machines.
   * claude-sync: refuse machine ids that could be paths, give each trash
     operation its own directory, don't purge trash on a dry run, and make
     rsync copy every file it is given.
