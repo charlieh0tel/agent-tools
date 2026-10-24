@@ -1,3 +1,11 @@
+agent-tools (1.2.0) unstable; urgency=medium
+
+  * claude-sync: add mv, which renames a project directory and updates
+    Claude Code's records of it (project dirs, transcript cwds,
+    history.jsonl, ~/.claude.json) so its sessions still resume.
+
+ -- Christopher Hoover <ch@murgatroid.com>  Sat, 24 Oct 2026 09:47:02 -0700
+
 agent-tools (1.1.2) unstable; urgency=medium
 
   * claude-sync: stop when a session record can't be read, instead of
