@@ -5,6 +5,10 @@ claude-sync \- two-way sync of Claude Code sessions between machines
 .B claude-sync sync
 .I host
 [\fB\-\-project\fR \fIDIR\fR | \fB\-\-all\fR] [\fB\-\-config\fR] [\fB\-n\fR] [\fB\-\-allow\-deletes\fR]
+.br
+.B claude-sync mv
+[\fB\-n\fR]
+.I old new
 .SH DESCRIPTION
 .B claude-sync
 syncs Claude Code sessions with
@@ -65,6 +69,39 @@ Print the plan and change nothing.
 .B \-\-allow\-deletes
 Allow a sync that deletes more than 20 files and more than a quarter of the
 files in scope; without it such a sync is refused.
+.SH MOVING A PROJECT
+.B claude-sync mv
+renames the directory
+.I old
+to
+.I new
+and updates Claude Code's records of it, so its sessions can still be resumed
+from the new path: the project directories under
+.I ~/.claude/projects
+for
+.I old
+and every directory inside it, the
+.B cwd
+of each record in their transcripts,
+.I history.jsonl
+and the per-project settings and GitHub repo paths in
+.IR ~/.claude.json .
+Paths mentioned in the conversations themselves are left as they were. If
+.I old
+is already gone and
+.I new
+exists, only the records are updated. It refuses while a session is running
+in
+.I old
+or
+.IR new ,
+and
+.B \-n
+prints what it would do.
+.PP
+Run it on both machines before the next sync. Run on one only, a sync with
+.B \-\-all
+would delete the old project's files on the other machine.
 .SH ENVIRONMENT
 .TP
 .B CLAUDE_SYNC_MACHINE_ID

@@ -531,5 +531,156 @@ class UnitTest(unittest.TestCase):
             self.assertFalse((dst / "link").exists() or (dst / "link").is_symlink())
 
 
+class MvTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name)
+        self.claude = base / ".claude"
+        (self.claude / "sessions").mkdir(parents=True)
+        self.old, self.new = base / "src" / "foo", base / "src" / "bar"
+        (self.old / "sub").mkdir(parents=True)
+        self.env = dict(os.environ, CLAUDE_SYNC_DIR=str(self.claude))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def project(self, path: Path) -> Path:
+        return self.claude / "projects" / claude_sync.encode(str(path))
+
+    def session(self, cwd: Path, uuid: str = U1, name: str | None = None) -> Path:
+        records = [
+            {"type": "user", "cwd": str(cwd), "message": {"content": f"cd {cwd}"}},
+            {"type": "summary", "summary": "no cwd"},
+            {"type": "assistant", "cwd": f"{cwd}/sub", "message": {"content": "ok"}},
+        ]
+        p = self.project(cwd) / (name or f"{uuid}.jsonl")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in records))
+        return p
+
+    def mv(self, *extra: str, ok: bool = True) -> str:
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT), "mv", *extra, str(self.old), str(self.new)],
+            env=self.env,
+            capture_output=True,
+            text=True,
+        )
+        if ok:
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        else:
+            self.assertNotEqual(r.returncode, 0, r.stdout)
+        return r.stdout + r.stderr
+
+    def cwds(self, p: Path) -> list:
+        return [json.loads(line).get("cwd") for line in p.read_text().splitlines()]
+
+    def test_moves_the_directory_and_claude_records(self):
+        (self.old / "file").write_text("kept\n")
+        self.session(self.old)
+        self.session(self.old / "sub", U2)
+        sub = self.project(self.old) / U1 / "subagents" / "agent-1.jsonl"
+        sub.parent.mkdir(parents=True)
+        shutil.copy(self.session(self.old, name="tmp.jsonl"), sub)
+        (self.project(self.old) / "tmp.jsonl").unlink()
+        (self.project(self.old) / "memory").mkdir()
+        (self.project(self.old) / "memory" / "MEMORY.md").write_text("- note\n")
+        other = self.session(self.old.parent / "foobar", U3)  # a sibling, not inside old
+        history = [
+            {"display": "a", "project": str(self.old), "timestamp": 1},
+            {"display": "b", "project": str(self.old.parent / "foobar"), "timestamp": 2},
+            {"display": "c", "project": str(self.old / "sub"), "timestamp": 3},
+        ]
+        (self.claude / "history.jsonl").write_text(
+            "".join(json.dumps(h, separators=(",", ":")) + "\n" for h in history)
+        )
+        config = {
+            "projects": {"/x": {}, str(self.old): {"trust": True}, "/y": {}},
+            "githubRepoPaths": {"me/foo": [str(self.old)], "me/y": ["/y"]},
+        }
+        (self.claude / ".claude.json").write_text(json.dumps(config, indent=2))
+        other_text = other.read_text()
+
+        out = self.mv()
+        self.assertIn("rewrite   3 transcripts", out)
+        self.assertFalse(self.old.exists())
+        self.assertEqual((self.new / "file").read_text(), "kept\n")
+        self.assertFalse(self.project(self.old).exists())
+        moved = self.project(self.new)
+        new, sub_new = str(self.new), f"{self.new}/sub"
+        self.assertEqual(self.cwds(moved / f"{U1}.jsonl"), [new, None, sub_new])
+        self.assertEqual(
+            self.cwds(moved / U1 / "subagents" / "agent-1.jsonl"), [new, None, sub_new]
+        )
+        sub_project = self.project(self.new / "sub") / f"{U2}.jsonl"
+        self.assertEqual(self.cwds(sub_project)[0], sub_new)
+        self.assertEqual((moved / "memory" / "MEMORY.md").read_text(), "- note\n")
+        self.assertIn(f"cd {self.old}", (moved / f"{U1}.jsonl").read_text())  # history as is
+        self.assertEqual(other.read_text(), other_text)
+        projects = [
+            json.loads(line)["project"]
+            for line in (self.claude / "history.jsonl").read_text().splitlines()
+        ]
+        self.assertEqual(projects, [new, str(self.old.parent / "foobar"), sub_new])
+        config = json.loads((self.claude / ".claude.json").read_text())
+        self.assertEqual(list(config["projects"]), ["/x", new, "/y"])
+        self.assertEqual(config["projects"][new], {"trust": True})
+        self.assertEqual(config["githubRepoPaths"], {"me/foo": [new], "me/y": ["/y"]})
+
+    def test_dry_run_changes_nothing(self):
+        p = self.session(self.old)
+        text = p.read_text()
+        out = self.mv("-n")
+        self.assertIn(f"move      {self.old} -> {self.new}", out)
+        self.assertIn("rewrite   1 transcripts", out)
+        self.assertTrue(self.old.is_dir())
+        self.assertFalse(self.new.exists())
+        self.assertEqual(p.read_text(), text)
+
+    def test_already_moved_directory_updates_records_only(self):
+        self.session(self.old)
+        self.old.rename(self.new)
+        self.assertIn("updating Claude's records only", self.mv())
+        self.assertEqual(self.cwds(self.project(self.new) / f"{U1}.jsonl")[0], str(self.new))
+
+    def test_same_encoding_from_another_directory_is_left_alone(self):
+        # src/foo-x and src/foo/x encode alike; only the one inside old moves
+        p = self.session(self.old.parent / "foo-x")
+        self.mv()
+        self.assertTrue(p.exists())
+        self.assertEqual(self.cwds(p)[0], str(self.old.parent / "foo-x"))
+
+    def test_refuses_while_a_session_runs_in_old_or_new(self):
+        pid = os.getpid()
+        record = {"pid": pid, "sessionId": U1, "procStart": proc_start(pid)}
+        for cwd in (self.old / "sub", self.new):
+            (self.claude / "sessions" / f"{pid}.json").write_text(
+                json.dumps({**record, "cwd": str(cwd)})
+            )
+            self.assertIn("close the sessions", self.mv(ok=False), cwd)
+            self.assertTrue(self.old.is_dir())
+
+    def test_refuses_an_existing_target_or_a_move_into_itself(self):
+        self.new.mkdir()
+        self.assertIn("already exists", self.mv(ok=False))
+        self.new.rmdir()
+        self.session(self.old)
+        self.project(self.new).mkdir(parents=True)
+        self.assertIn("already exists", self.mv(ok=False))
+        self.assertTrue(self.old.is_dir())
+        self.new = self.old / "inner"
+        self.assertIn("into itself", self.mv(ok=False))
+
+    def test_move_field_keeps_unchanged_lines_and_a_missing_last_newline(self):
+        text = '{"cwd": "/a/b", "x": 1}\nnot json\n{"cwd":"/a"}'
+        out = claude_sync.move_field(text, "cwd", "/a", "/c", Path("t"))
+        self.assertEqual(out, '{"cwd":"/c/b","x":1}\nnot json\n{"cwd":"/c"}')
+        self.assertIs(claude_sync.move_field(text, "cwd", "/z", "/c", Path("t")), text)
+
+    def test_move_config_keeps_settings_already_at_the_new_path(self):
+        text = json.dumps({"projects": {"/a": {"old": 1}, "/c": {"new": 1}}}, indent=2)
+        out = json.loads(claude_sync.move_config(text, "/a", "/c"))
+        self.assertEqual(out["projects"], {"/a": {"old": 1}, "/c": {"new": 1}})
+
+
 if __name__ == "__main__":
     unittest.main()

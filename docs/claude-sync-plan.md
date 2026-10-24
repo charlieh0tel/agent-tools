@@ -133,6 +133,14 @@ sync(host, scope):
        hand until a real case shows it's needed.
 5. [x] Ship in the agent-tools package as `/usr/bin/claude-sync`.
 6. [ ] Opt-in SessionEnd hook and `cs` wrapper.
+7. [x] `mv OLD NEW`: rename a project directory and Claude's records of it.
+       The project dirs of OLD and its subdirectories are renamed (a dir is
+       checked against its sessions' first `cwd`, since the encoding is
+       lossy), each record's top-level `cwd` and each `history.jsonl`
+       `project` is rewritten, and so are `~/.claude.json`'s `projects` keys
+       and `githubRepoPaths`. Paths inside messages and nested metadata stay
+       as they were. Run on both machines before syncing, or a sync with
+       `--all` sees the old files as deleted.
 
 ## Known gaps
 

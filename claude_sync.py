@@ -918,6 +918,212 @@ def cmd_sync(args) -> None:
         os.close(local_lock)
 
 
+# --------------------------------------------------------------------- move
+
+
+def claude_json() -> Path:
+    """Claude Code's global config: ~/.claude.json, or .claude.json inside a config
+    dir given by CLAUDE_SYNC_DIR, as Claude Code does with CLAUDE_CONFIG_DIR."""
+    if "CLAUDE_SYNC_DIR" in os.environ:
+        return claude_dir() / ".claude.json"
+    return Path.home() / ".claude.json"
+
+
+def moved(path, old: str, new: str) -> str | None:
+    """path with old replaced by new if it is old or inside it, else None."""
+    if not isinstance(path, str):
+        return None
+    if path == old:
+        return new
+    if path.startswith(old + "/"):
+        return new + path[len(old) :]
+    return None
+
+
+def move_field(text: str, key: str, old: str, new: str, source: Path) -> str:
+    """JSONL text with each record's top-level key moved from old to new. Only the
+    records that change are re-serialized."""
+    out, changed = [], False
+    for n, line in enumerate(jsonl_lines(text), 1):
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            print(f"claude-sync: {source}:{n}: not JSON; left as is", file=sys.stderr)
+            r = None
+        if isinstance(r, dict) and (to := moved(r.get(key), old, new)):
+            r[key], changed = to, True
+            line = json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n"
+        out.append(line)
+    if not changed:
+        return text
+    if not text.endswith("\n"):
+        out[-1] = out[-1].removesuffix("\n")
+    return "".join(out)
+
+
+def move_config(text: str, old: str, new: str) -> str:
+    """~/.claude.json with the per-project settings and GitHub repo paths moved."""
+    config, changed = json.loads(text), False
+    if projects := config.get("projects"):
+        renamed = {}
+        for key, value in projects.items():
+            to = moved(key, old, new)
+            if to and to in projects:
+                print(f"claude-sync: {to} already has settings; left {key}'s", file=sys.stderr)
+                to = None
+            renamed[to or key] = value  # in place, so the file keeps its order
+            changed |= bool(to)
+        config["projects"] = renamed
+    repos = config.get("githubRepoPaths") or {}
+    for repo, paths in repos.items():
+        to = list(dict.fromkeys(moved(p, old, new) or p for p in paths))
+        if to != paths:
+            repos[repo], changed = to, True
+    if not changed:
+        return text
+    # Claude writes it as JSON.stringify(config, null, 2) does.
+    return json.dumps(config, indent=2, ensure_ascii=False) + text[len(text.rstrip()) :]
+
+
+def rewrite(path: Path, edit, dry_run: bool) -> bool:
+    """Replace path's text with edit(text) if that changes it; return whether it does.
+
+    Running sessions append to history.jsonl and rewrite ~/.claude.json at any time,
+    so a file that changed while being edited is edited again.
+    """
+    for _ in range(3):
+        st = path.stat()
+        text = path.read_text()
+        out = edit(text)
+        if out == text:
+            return False
+        if dry_run:
+            return True
+        now = path.stat()
+        if (now.st_size, now.st_mtime_ns) == (st.st_size, st.st_mtime_ns):
+            write_file(path, out, stat.S_IMODE(st.st_mode))
+            return True
+    sys.exit(f"claude-sync: {path} keeps changing; try again")
+
+
+def first_cwd(transcript: Path) -> str | None:
+    """The directory a session was started in: the first cwd its transcript records."""
+    with open(transcript) as f:
+        for line in f:
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(r, dict) and isinstance(r.get("cwd"), str):
+                return r["cwd"]
+    return None
+
+
+def project_moves(old: str, new: str) -> list[tuple[Path, Path]]:
+    """Project dirs of old and of the directories inside it, with their new names.
+
+    The encoding is lossy (/a/b-c and /a/b/c share a name), so a dir whose name
+    matches is checked against the cwds its sessions recorded.
+    """
+    projects = claude_dir() / "projects"
+    enc_old, enc_new = encode(old), encode(new)
+    if not projects.is_dir():
+        return []
+    moves = []
+    for d in sorted(projects.iterdir()):
+        if not (d.name == enc_old or d.name.startswith(enc_old + "-")):
+            continue
+        if d.is_symlink() or not d.is_dir():
+            continue
+        cwds = {first_cwd(t) for t in d.glob("*.jsonl") if not t.is_symlink()} - {None}
+        ours = {c for c in cwds if moved(c, old, new)}
+        if cwds and not ours:
+            continue  # another directory's sessions, under a name that encodes the same
+        if ours != cwds:
+            sys.exit(
+                f"claude-sync: {d} holds sessions from {', '.join(sorted(ours))} and from "
+                f"{', '.join(sorted(cwds - ours))}; move them by hand"
+            )
+        if not cwds and d.name != enc_old:
+            print(f"claude-sync: skipping {d}: no session says whose it is", file=sys.stderr)
+            continue
+        moves.append((d, projects / (enc_new + d.name[len(enc_old) :])))
+    return moves
+
+
+def cmd_mv(args) -> None:
+    old, new = os.path.abspath(args.old), os.path.abspath(args.new)
+    if old == "/" or moved(new, old, new):
+        sys.exit(f"claude-sync: can't move {old} into itself")
+    if os.path.lexists(old):
+        if not os.path.isdir(old):
+            sys.exit(f"claude-sync: {old} is not a directory")
+        if os.path.lexists(new):
+            sys.exit(f"claude-sync: {new} already exists")
+        move_dir = True
+    elif os.path.isdir(new):
+        print(f"note      {old} is gone and {new} exists; updating Claude's records only")
+        move_dir = False
+    else:
+        sys.exit(f"claude-sync: {old} does not exist")
+
+    # A running session would keep writing under the project dir and path it started with.
+    open_ = [
+        info
+        for info in live_sessions().values()
+        if any(moved(info.get("cwd"), d, d) for d in (old, new))
+    ]
+    if open_:
+        sys.exit(
+            f"claude-sync: close the sessions running in {old} or {new} first:\n"
+            + "\n".join(f"  {describe(info)}" for info in open_)
+        )
+    if not args.dry_run:
+        local_lock = lock_local()
+
+    moves = project_moves(old, new)
+    for _, dst in moves:
+        if dst.exists():
+            sys.exit(f"claude-sync: {dst} already exists")
+    if move_dir:
+        print(f"move      {old} -> {new}")
+    for src, dst in moves:
+        print(f"move      projects/{src.name} -> projects/{dst.name}")
+
+    if move_dir and not args.dry_run:
+        try:
+            os.rename(old, new)
+        except OSError as e:
+            sys.exit(f"claude-sync: can't move {old} to {new}: {e.strerror}")
+    # Transcripts before their dirs, so a rerun after a failure finds them again.
+    transcripts = 0
+    for src, dst in moves:
+        for p in walk(src):
+            is_transcript = p.suffix == ".jsonl" or ".jsonl.conflict-" in p.name
+            if is_transcript and not p.is_symlink():
+                edit = lambda text, p=p: move_field(text, "cwd", old, new, p)  # noqa: E731
+                transcripts += rewrite(p, edit, args.dry_run)
+        if not args.dry_run:
+            src.rename(dst)
+    if transcripts:
+        print(f"rewrite   {transcripts} transcripts")
+
+    history = claude_dir() / HISTORY
+    config = claude_json()
+    edits = [
+        (history, lambda text: move_field(text, "project", old, new, history)),
+        (config, lambda text: move_config(text, old, new)),
+    ]
+    for path, edit in edits:
+        if not path.exists():
+            print(f"claude-sync: no {path}; skipped", file=sys.stderr)
+        elif rewrite(path, edit, args.dry_run):
+            print(f"rewrite   {path}")
+
+    if not args.dry_run:
+        os.close(local_lock)
+
+
 def main() -> None:
     if len(sys.argv) >= 2 and sys.argv[1] == "--remote":
         remote_main(sys.argv[2], sys.argv[3])
@@ -939,6 +1145,11 @@ def main() -> None:
     s.add_argument("--allow-deletes", action="store_true", help="allow deleting many files at once")
     s.add_argument("--remote-dir", help=argparse.SUPPRESS)  # for testing against a scratch copy
     s.set_defaults(func=cmd_sync)
+    m = sub.add_parser("mv", help="rename a project directory and Claude's records of it")
+    m.add_argument("old")
+    m.add_argument("new")
+    m.add_argument("--dry-run", "-n", action="store_true", help="print the plan, change nothing")
+    m.set_defaults(func=cmd_mv)
 
     args = ap.parse_args()
     args.func(args)

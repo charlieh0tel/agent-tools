@@ -37,6 +37,11 @@ claude-sync sync laptop          # this project's sessions + prompt history
 claude-sync sync laptop --all    # every project
 ```
 
+`claude-sync mv OLD NEW` renames a project directory and updates Claude's
+records of it (project dirs, transcript `cwd`s, `history.jsonl`,
+`~/.claude.json`), so its sessions still resume from the new path. Run it on
+both machines before the next sync.
+
 A session continued on both machines is chained into one conversation, with
 both originals kept as `.conflict-*` copies. Sessions open on the receiving
 side are skipped. See `claude-sync(1)` and
