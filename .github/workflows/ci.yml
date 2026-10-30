@@ -14,11 +14,11 @@ permissions:
 jobs:
   # uv is detected from uv.lock; ruff and pytest come from the locked dev group.
   python-ci:
-    uses: charlieh0tel/deb-workflows/.github/workflows/python-ci.yml@f99e1c0f08ee2d758340a72dc65a19313fd9eb17  # v1
+    uses: charlieh0tel/deb-workflows/.github/workflows/python-ci.yml@4d97a66433801d0d096926cecdc34e561fa99429  # v1
 
   # Builds the .deb on every run; publishes a GitHub Release on v* tags.
   build-deb:
-    uses: charlieh0tel/deb-workflows/.github/workflows/dpkg-build-deb.yml@f99e1c0f08ee2d758340a72dc65a19313fd9eb17  # v1
+    uses: charlieh0tel/deb-workflows/.github/workflows/dpkg-build-deb.yml@4d97a66433801d0d096926cecdc34e561fa99429  # v1
     # Scoped to this job. At workflow level it would also be granted to the
     # dispatch job below, which authenticates with its own PAT and writes
     # nothing here.
