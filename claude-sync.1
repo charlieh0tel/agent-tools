@@ -4,10 +4,10 @@ claude-sync \- two-way sync of Claude Code sessions between machines
 .SH SYNOPSIS
 .B claude-sync sync
 .I host
-[\fB\-\-project\fR \fIDIR\fR | \fB\-\-all\fR] [\fB\-\-config\fR] [\fB\-n\fR] [\fB\-\-allow\-deletes\fR]
+[\fB\-\-project\fR \fIDIR\fR | \fB\-\-all\fR] [\fB\-\-account\fR \fIname\fR] [\fB\-\-config\fR] [\fB\-n\fR] [\fB\-\-allow\-deletes\fR]
 .br
 .B claude-sync mv
-[\fB\-n\fR]
+[\fB\-\-account\fR \fIname\fR] [\fB\-n\fR]
 .I old new
 .SH DESCRIPTION
 .B claude-sync
@@ -54,6 +54,10 @@ Sync the sessions of the project in
 .TP
 .B \-\-all
 Sync every project.
+.TP
+.BI \-\-account " name"
+Sync this account instead of the project's; see
+.BR ACCOUNTS .
 .TP
 .B \-\-config
 Also sync
@@ -102,6 +106,29 @@ prints what it would do.
 Run it on both machines before the next sync. Run on one only, a sync with
 .B \-\-all
 would delete the old project's files on the other machine.
+.SH ACCOUNTS
+With accounts set up by
+.BR claude\-user (1),
+each command works on one account's Claude dir:
+.I ~/.claude
+for the default account,
+.I ~/.claude\-name
+for the others. It is the account named with
+.BR \-\-account ,
+else the one the project directory belongs to: with
+.BR \-\-all ,
+the current directory's; for
+.BR mv ,
+.IR old 's.
+.B sync
+passes the account's name to
+.IR host ,
+which finds its Claude dir from its own config, so the account that owns
+.I ~/.claude
+can differ between the machines. The account's dir must exist on both. Without
+a config, everything is in
+.IR ~/.claude ,
+as before.
 .SH ENVIRONMENT
 .TP
 .B CLAUDE_SYNC_MACHINE_ID
@@ -111,7 +138,8 @@ is missing.
 .SH FILES
 .TP
 .I ~/.claude/claude\-sync/
-Lock, per-peer sync state, trash and staging, on each machine.
+Lock, per-peer sync state, trash and staging, on each machine, in each
+account's Claude dir.
 .TP
 .I ~/.cache/claude\-sync/hash\-cache.json
 Cached file hashes.

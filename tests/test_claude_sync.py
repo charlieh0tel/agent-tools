@@ -682,5 +682,105 @@ class MvTest(unittest.TestCase):
         self.assertEqual(out["projects"], {"/a": {"old": 1}, "/c": {"new": 1}})
 
 
+class AccountTest(unittest.TestCase):
+    """Sync and mv with claude-user accounts. The two sides have their own home, and
+    the account that owns ~/.claude differs between them."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name).resolve()
+        self.here, self.there = base / "here", base / "there"
+        self.project_dir = self.here / "src" / "demo"
+        self.project_dir.mkdir(parents=True)
+        self.enc = claude_sync.encode(str(self.project_dir))
+        self.config(self.here, "default = work\n[dirs]\n~/src = personal\n")
+        self.config(self.there, "default = personal\n")
+        for d in (self.here / ".claude", self.here / ".claude-personal"):
+            (d / "sessions").mkdir(parents=True)
+        (self.there / ".claude" / "sessions").mkdir(parents=True)
+        (self.there / ".claude-work").mkdir()
+        self.env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("CLAUDE_SYNC_DIR", "CLAUDE_USER_CONFIG", "XDG_CONFIG_HOME")
+        }
+        self.env.update(
+            HOME=str(self.here),
+            CLAUDE_SYNC_REMOTE_HOME=str(self.there),
+            CLAUDE_SYNC_CACHE=str(base / "cache.json"),
+            CLAUDE_SYNC_MACHINE_ID="test-machine",
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def config(self, home: Path, text: str) -> None:
+        path = home / ".config" / "claude-user" / "config"
+        path.parent.mkdir(parents=True)
+        path.write_text(text)
+
+    def run_sync(self, *args: str, ok: bool = True) -> str:
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT), *args],
+            env=self.env,
+            cwd=self.project_dir,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(r.returncode == 0, ok, r.stderr + r.stdout)
+        return r.stdout + r.stderr
+
+    def test_sync_maps_the_account_on_each_side(self):
+        rel = f"projects/{self.enc}/{U1}.jsonl"
+        (self.here / ".claude-personal" / rel).parent.mkdir(parents=True)
+        (self.here / ".claude-personal" / rel).write_text("a\n")
+        out = self.run_sync("sync", "@local")
+        self.assertIn(f"account   personal: {self.here}/.claude-personal here", out)
+        self.assertEqual((self.there / ".claude" / rel).read_text(), "a\n")
+        self.assertFalse((self.here / ".claude" / "projects").exists())
+
+    def test_sync_account_option_and_default_account(self):
+        rel = f"projects/{self.enc}/{U1}.jsonl"
+        (self.here / ".claude" / rel).parent.mkdir(parents=True)
+        (self.here / ".claude" / rel).write_text("w\n")
+        self.run_sync("sync", "@local", "--account", "work")
+        self.assertEqual((self.there / ".claude-work" / rel).read_text(), "w\n")
+
+    def test_sync_refuses_a_missing_account_dir(self):
+        shutil.rmtree(self.there / ".claude-work")
+        out = self.run_sync("sync", "@local", "--account", "work", ok=False)
+        self.assertIn(f"has no {self.there}/.claude-work", out)
+        out = self.run_sync("sync", "@local", "--account", "other", ok=False)
+        self.assertIn(f"has no {self.here}/.claude-other here", out)
+
+    def test_mv_updates_the_account_records(self):
+        new = self.here / "src" / "renamed"
+        proj = self.here / ".claude-personal" / "projects" / self.enc
+        proj.mkdir(parents=True)
+        (proj / f"{U1}.jsonl").write_text(json.dumps({"cwd": str(self.project_dir)}) + "\n")
+        config = {"projects": {str(self.project_dir): {}}}
+        (self.here / ".claude-personal" / ".claude.json").write_text(json.dumps(config))
+        (self.here / ".claude.json").write_text(json.dumps(config))
+        self.run_sync("mv", str(self.project_dir), str(new))
+        moved = self.here / ".claude-personal" / "projects" / claude_sync.encode(str(new))
+        self.assertEqual(json.loads((moved / f"{U1}.jsonl").read_text())["cwd"], str(new))
+        account_config = json.loads((self.here / ".claude-personal" / ".claude.json").read_text())
+        self.assertEqual(list(account_config["projects"]), [str(new)])
+        self.assertEqual(json.loads((self.here / ".claude.json").read_text()), config)
+
+    def test_mv_warns_when_the_new_path_has_another_account(self):
+        (self.here / "elsewhere").mkdir()
+        out = self.run_sync("mv", str(self.project_dir), str(self.here / "elsewhere" / "demo"))
+        self.assertIn("belongs to account work", out)
+
+    def test_claude_json_follows_the_claude_dir(self):
+        with mock.patch.dict(os.environ, HOME=str(self.here)):
+            os.environ.pop("CLAUDE_SYNC_DIR", None)
+            with mock.patch.object(claude_sync, "ACCOUNT_DIR", None):
+                self.assertEqual(claude_sync.claude_json(), self.here / ".claude.json")
+            with mock.patch.object(claude_sync, "ACCOUNT_DIR", self.here / ".claude-x"):
+                self.assertEqual(claude_sync.claude_json(), self.here / ".claude-x/.claude.json")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -85,6 +85,11 @@ sync(host, scope):
   starts the sync. Keeping it inside `~/.claude` puts trash and staging on the
   same filesystem as the data, so moves are renames. The hash cache stays in
   `~/.cache/claude-sync/`.
+- **Accounts** (claude-user): a sync works on one account's Claude dir on each
+  side. The syncing machine picks the account and sends its name; the peer
+  maps the name to a dir with its own config, since which account owns
+  `~/.claude` is per machine. Tool state lives inside each account's dir, so
+  each account has its own lock, base and trash.
 - **Deletions** are tracked against the sync base and applied to the other side.
   The deleted file is first moved to `~/.claude/claude-sync/trash/<timestamp>/`,
   and trash older than 30 days is cleared at the start of each sync. A file that

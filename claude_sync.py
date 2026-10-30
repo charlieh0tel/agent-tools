@@ -39,8 +39,13 @@ MASS_DELETE = (
 )  # refuse to delete more than this many files AND this fraction of the scope
 
 
+ACCOUNT_DIR = None  # the selected account's Claude dir; see select_account()
+
+
 def claude_dir() -> Path:
-    return Path(os.environ.get("CLAUDE_SYNC_DIR", Path.home() / ".claude"))
+    if override := os.environ.get("CLAUDE_SYNC_DIR"):  # for testing against a scratch copy
+        return Path(override)
+    return ACCOUNT_DIR or Path.home() / ".claude"
 
 
 def sync_dir() -> Path:
@@ -153,6 +158,18 @@ def account_dir(account: str | None, config: UserConfig) -> Path:
     if account is None or account == config.default:
         return Path.home() / ".claude"
     return Path.home() / f".claude-{account}"
+
+
+def select_account(account: str | None, where: str) -> None:
+    """Work in account's Claude dir from now on; None is the default account. Each
+    machine maps the name with its own config: the default account uses ~/.claude."""
+    global ACCOUNT_DIR
+    if "CLAUDE_SYNC_DIR" in os.environ:
+        return
+    d = account_dir(account, load_user_config())
+    if d != Path.home() / ".claude" and not d.is_dir():
+        sys.exit(f"claude-sync: account {account} has no {d} {where}; create it first")
+    ACCOUNT_DIR = d
 
 
 # ---------------------------------------------------------------- file kinds
@@ -406,11 +423,12 @@ def prefix_hashes(requests: list) -> dict:
 
 
 class Remote:
-    def __init__(self, host: str, remote_dir: str | None):
-        if host == "@local" and not remote_dir:
-            sys.exit("claude-sync: @local needs --remote-dir")
+    def __init__(self, host: str, remote_dir: str | None, account: str | None):
+        if host == "@local" and not (remote_dir or os.environ.get("CLAUDE_SYNC_REMOTE_HOME")):
+            sys.exit("claude-sync: @local needs --remote-dir or CLAUDE_SYNC_REMOTE_HOME")
         self.host = host
         self.remote_dir = remote_dir
+        self.account = account
         self.script = Path(__file__).read_bytes()
         self.lock_proc = None
         self.root = None  # the peer's Claude dir, an absolute path once connect() has run
@@ -421,7 +439,8 @@ class Remote:
 
     def _argv(self, command: str) -> list[str]:
         if self.host == "@local":  # test hook: run the "remote" side as a local subprocess
-            return ["sh", "-c", command]
+            home = os.environ.get("CLAUDE_SYNC_REMOTE_HOME")
+            return [*(["env", f"HOME={home}"] if home else []), "sh", "-c", command]
         return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", self.host, command]
 
     def _fail(self, what: str, code: int, stderr: bytes):
@@ -435,6 +454,8 @@ class Remote:
         cmd = ["python3", "-", "--remote", op, json.dumps(arg)]
         if self.remote_dir:
             cmd = ["env", f"CLAUDE_SYNC_DIR={self.remote_dir}", *cmd]
+        elif self.account:
+            cmd = ["env", f"CLAUDE_SYNC_ACCOUNT={self.account}", *cmd]
         r = subprocess.run(self._argv(shlex.join(cmd)), input=self.script, capture_output=True)
         if r.returncode != 0:
             self._fail(op, r.returncode, r.stderr)
@@ -474,6 +495,10 @@ class Remote:
 
 def remote_main(op: str, arg: str) -> None:
     arg = json.loads(arg)
+    account = os.environ.get("CLAUDE_SYNC_ACCOUNT")
+    select_account(
+        account and check_account(account, "the syncing machine"), f"on {os.uname().nodename}"
+    )
     if op == "dir":
         result = str(claude_dir().absolute())
     elif op == "scan":
@@ -948,10 +973,21 @@ def new_base(plan: list, local: dict, remote_: dict, base: dict, merged: dict) -
 # ---------------------------------------------------------------------- cli
 
 
+def command_account(args, path: str) -> str | None:
+    """The account a command works on: --account, else the one path belongs to."""
+    if args.account:
+        return check_account(args.account, "--account")
+    return account_of(path, load_user_config())[0]
+
+
 def cmd_sync(args) -> None:
     project = None if args.all else encode(os.path.abspath(args.project))
-    remote = Remote(args.host, args.remote_dir)
+    account = command_account(args, os.getcwd() if args.all else args.project)
+    select_account(account, "here")
+    remote = Remote(args.host, args.remote_dir, account)
     remote.connect()
+    if account:
+        print(f"account   {account}: {claude_dir()} here, {remote.root} on {args.host}")
 
     if not args.dry_run:
         local_lock = lock_local()
@@ -1018,11 +1054,11 @@ def cmd_sync(args) -> None:
 
 
 def claude_json() -> Path:
-    """Claude Code's global config: ~/.claude.json, or .claude.json inside a config
-    dir given by CLAUDE_SYNC_DIR, as Claude Code does with CLAUDE_CONFIG_DIR."""
-    if "CLAUDE_SYNC_DIR" in os.environ:
-        return claude_dir() / ".claude.json"
-    return Path.home() / ".claude.json"
+    """Claude Code's global config: ~/.claude.json for ~/.claude, else .claude.json
+    inside the Claude dir, as Claude Code does with CLAUDE_CONFIG_DIR."""
+    if claude_dir() == Path.home() / ".claude":
+        return Path.home() / ".claude.json"
+    return claude_dir() / ".claude.json"
 
 
 def moved(path, old: str, new: str) -> str | None:
@@ -1151,6 +1187,14 @@ def cmd_mv(args) -> None:
     old, new = os.path.abspath(args.old), os.path.abspath(args.new)
     if old == "/" or moved(new, old, new):
         sys.exit(f"claude-sync: can't move {old} into itself")
+    account = command_account(args, old)
+    select_account(account, "here")
+    if not args.account and (to := account_of(new, load_user_config())[0]) != account:
+        print(
+            f"claude-sync: {new} belongs to account {to or 'default'}, but its sessions stay in "
+            f"{account}'s {claude_dir()}",
+            file=sys.stderr,
+        )
     if os.path.lexists(old):
         if not os.path.isdir(old):
             sys.exit(f"claude-sync: {old} is not a directory")
@@ -1239,11 +1283,13 @@ def main() -> None:
     )
     s.add_argument("--dry-run", "-n", action="store_true", help="print the plan, change nothing")
     s.add_argument("--allow-deletes", action="store_true", help="allow deleting many files at once")
+    s.add_argument("--account", help="the account to sync (default: the project's)")
     s.add_argument("--remote-dir", help=argparse.SUPPRESS)  # for testing against a scratch copy
     s.set_defaults(func=cmd_sync)
     m = sub.add_parser("mv", help="rename a project directory and Claude's records of it")
     m.add_argument("old")
     m.add_argument("new")
+    m.add_argument("--account", help="the account whose records to update (default: old's)")
     m.add_argument("--dry-run", "-n", action="store_true", help="print the plan, change nothing")
     m.set_defaults(func=cmd_mv)
 
