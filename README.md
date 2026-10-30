@@ -73,6 +73,7 @@ logins, sessions and history stay apart. Each account has its own config dir
 ```
 claude-user default work              # ~/.claude is the work account here
 claude-user init personal             # create ~/.claude-personal with its settings
+claude-user login personal            # log it in, from an empty temp dir
 claude-user add personal ~/src        # ~/src and everything in it is personal...
 claude-user add work ~/src/impulse    # ...except this: the longest match wins
 claude-user                           # which account applies here, and why

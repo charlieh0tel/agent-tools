@@ -10,7 +10,9 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -162,7 +164,7 @@ def cmd_init(args) -> None:
         else:
             continue
         print(f"copy      {tilde(src / name)} -> {tilde(dest / name)}")
-    print(f"created   {tilde(dest)}; log in with: claude-user run -a {account}, then /login")
+    print(f"created   {tilde(dest)}; log in with: claude-user login {account}")
 
 
 def login(d: Path) -> str | None:
@@ -241,8 +243,8 @@ def diagnose(config, held: dict[Path, list]) -> list[tuple[bool, str]]:
             out.append((True, f"{name}: logged in as {who}"))
             logins.setdefault(who, []).append(account or "default")
         else:
-            how = f"claude-user run -a {account}" if account else "claude"
-            out.append((False, f"{name}: not logged in; log in with: {how}, then /login"))
+            how = f"claude-user login {account}" if account else "claude auth login"
+            out.append((False, f"{name}: not logged in; log in with: {how}"))
         counts = {}
         for _, cwd, _ in held.get(d, []):
             if cwd is not None and account_dir(to := account_of(cwd, config)[0], config) != d:
@@ -325,6 +327,18 @@ def find_claude() -> str:
     return exe
 
 
+def cmd_login(args) -> None:
+    """Log account in from an empty temporary directory, so no project of the account
+    gets a record of it."""
+    env, exe = account_env(check_account(args.account, "claude-user")), find_claude()
+    with tempfile.TemporaryDirectory(prefix="claude-user-") as d:
+        try:
+            r = subprocess.run([exe, "auth", "login", *args.args], cwd=d, env=env)
+        except OSError as e:
+            sys.exit(f"claude-user: can't run {exe}: {e.strerror}")
+    sys.exit(r.returncode)
+
+
 def cmd_run(args) -> None:
     env, exe = account_env(args.account), find_claude()
     try:
@@ -359,6 +373,10 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("init", help="create an account's config dir")
     p.add_argument("account")
     p.set_defaults(func=cmd_init)
+    p = sub.add_parser("login", help="log an account in, from an empty temporary directory")
+    p.add_argument("account")
+    p.add_argument("args", nargs=argparse.REMAINDER, help="arguments for claude auth login")
+    p.set_defaults(func=cmd_login)
     p = sub.add_parser("diagnose", help="check the accounts' config dirs, logins and projects")
     p.set_defaults(func=cmd_diagnose)
     argv = sys.argv[1:] if argv is None else argv

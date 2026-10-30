@@ -23,6 +23,10 @@ claude-user \- run Claude Code as the account a directory belongs to
 .B claude-user init
 .I account
 .br
+.B claude-user login
+.I account
+[\fIlogin-args\fR ...]
+.br
 .B claude-user diagnose
 .SH DESCRIPTION
 .B claude-user
@@ -113,10 +117,19 @@ and
 into it from
 .IR ~/.claude .
 Credentials, sessions and plugins are not copied: log in with
-.B claude-user run \-a
-.I account
-and
-.BR /login .
+.B claude-user login
+.IR account .
+.TP
+.BI login " account" " \fR[\fPlogin-args\fR ...]"
+Run
+.B claude auth login
+with
+.I login-args
+as
+.IR account ,
+from an empty temporary directory that is removed afterwards, so that none of
+the account's projects gets a record of the login session. Exits with its
+status.
 .TP
 .B diagnose
 List each config dir here with the account that uses it, and under it the

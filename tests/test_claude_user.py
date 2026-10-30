@@ -1,4 +1,5 @@
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -276,9 +277,31 @@ def test_diagnose_an_account_that_is_not_logged_in(home, capsys):
         "~/.claude-lab  lab",
         "  ~  (default)  belongs in ~/.claude",
         "",
-        "problem   (unnamed default)  ~/.claude: not logged in; log in with: claude, then /login",
-        "problem   lab  ~/.claude-lab: not logged in; "
-        "log in with: claude-user run -a lab, then /login",
+        "problem   (unnamed default)  ~/.claude: not logged in; log in with: claude auth login",
+        "problem   lab  ~/.claude-lab: not logged in; log in with: claude-user login lab",
         "problem   lab  ~/.claude-lab: holds 1 projects of the default account; "
         "move them with: claude-sync split --all --from lab",
     ]
+
+
+def test_login_runs_in_an_empty_temporary_dir(home, monkeypatch):
+    write_config(home, "default = work\n")
+    (home / ".claude-personal").mkdir()
+    monkeypatch.chdir(home / "src" / "impulse")
+    monkeypatch.setattr(claude_user, "claude_exe", lambda: "/opt/claude")
+    calls = []
+
+    def run(argv, cwd, env):
+        calls.append((argv, sorted(os.listdir(cwd)), env.get("CLAUDE_CONFIG_DIR"), cwd))
+        return subprocess.CompletedProcess(argv, 3)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(SystemExit) as e:
+        claude_user.main(["login", "personal", "--email", "me@home"])
+    assert e.value.code == 3
+    argv, listing, config_dir, cwd = calls.pop()
+    assert argv == ["/opt/claude", "auth", "login", "--email", "me@home"]
+    assert (listing, config_dir) == ([], str(home / ".claude-personal"))
+    assert not os.path.exists(cwd)
+    with pytest.raises(SystemExit, match="claude-user init lab"):
+        claude_user.main(["login", "lab"])
