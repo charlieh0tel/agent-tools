@@ -321,6 +321,11 @@ class Remote:
         self.remote_dir = remote_dir
         self.script = Path(__file__).read_bytes()
         self.lock_proc = None
+        self.root = None  # the peer's Claude dir, an absolute path once connect() has run
+
+    def connect(self) -> None:
+        """Ask the peer where its Claude dir is, so it is decided in one place: there."""
+        self.root = self.call("dir", None)
 
     def _argv(self, command: str) -> list[str]:
         if self.host == "@local":  # test hook: run the "remote" side as a local subprocess
@@ -344,8 +349,8 @@ class Remote:
         return json.loads(r.stdout)
 
     def rsync_root(self) -> str:
-        """The remote ~/.claude as an rsync endpoint, with a trailing slash."""
-        root = (self.remote_dir or ".claude").rstrip("/") + "/"
+        """The peer's Claude dir as an rsync endpoint, with a trailing slash."""
+        root = self.root.rstrip("/") + "/"
         return root if self.host == "@local" else f"{self.host}:{root}"
 
     def lock(self) -> None:
@@ -354,11 +359,7 @@ class Remote:
         `python3 -` reads the script to EOF before running it, so the lock can't
         be held by this script; flock + cat keeps it until our end of stdin closes.
         """
-        d = (
-            shlex.quote(f"{self.remote_dir}/{SYNC}")
-            if self.remote_dir
-            else f'"$HOME/.claude/{SYNC}"'
-        )
+        d = shlex.quote(f"{self.root}/{SYNC}")
         command = f"mkdir -p {d} && flock -n {d}/lock -c 'echo locked; exec cat >/dev/null'"
         self.lock_proc = subprocess.Popen(
             self._argv(command),
@@ -381,7 +382,9 @@ class Remote:
 
 def remote_main(op: str, arg: str) -> None:
     arg = json.loads(arg)
-    if op == "scan":
+    if op == "dir":
+        result = str(claude_dir().absolute())
+    elif op == "scan":
         result = scan(arg)
     elif op == "prefix":
         check_paths((rel for rel, _ in arg), "the syncing machine")
@@ -856,6 +859,7 @@ def new_base(plan: list, local: dict, remote_: dict, base: dict, merged: dict) -
 def cmd_sync(args) -> None:
     project = None if args.all else encode(os.path.abspath(args.project))
     remote = Remote(args.host, args.remote_dir)
+    remote.connect()
 
     if not args.dry_run:
         local_lock = lock_local()
