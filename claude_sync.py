@@ -359,9 +359,9 @@ def read_session(f: Path) -> dict | None:
     sys.exit(f"claude-sync: can't read {f}: {err}; can't tell which sessions are running")
 
 
-def live_sessions() -> dict:
+def live_sessions(root: Path | None = None) -> dict:
     live = {}
-    for f in (claude_dir() / "sessions").glob("*.json"):
+    for f in ((root or claude_dir()) / "sessions").glob("*.json"):
         if (s := read_session(f)) is None:
             continue
         if "pid" in s and proc_start(s["pid"]) == s.get("procStart"):
@@ -516,9 +516,10 @@ def remote_main(op: str, arg: str) -> None:
     json.dump(result, sys.stdout)
 
 
-def lock_local():
-    sync_dir().mkdir(parents=True, exist_ok=True)
-    fd = os.open(sync_dir() / "lock", os.O_WRONLY | os.O_CREAT)
+def lock_local(root: Path | None = None):
+    d = (root or claude_dir()) / SYNC
+    d.mkdir(parents=True, exist_ok=True)
+    fd = os.open(d / "lock", os.O_WRONLY | os.O_CREAT)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -1053,12 +1054,13 @@ def cmd_sync(args) -> None:
 # --------------------------------------------------------------------- move
 
 
-def claude_json() -> Path:
+def claude_json(root: Path | None = None) -> Path:
     """Claude Code's global config: ~/.claude.json for ~/.claude, else .claude.json
     inside the Claude dir, as Claude Code does with CLAUDE_CONFIG_DIR."""
-    if claude_dir() == Path.home() / ".claude":
+    root = root or claude_dir()
+    if root == Path.home() / ".claude":
         return Path.home() / ".claude.json"
-    return claude_dir() / ".claude.json"
+    return root / ".claude.json"
 
 
 def moved(path, old: str, new: str) -> str | None:
@@ -1192,7 +1194,7 @@ def cmd_mv(args) -> None:
     if not args.account and (to := account_of(new, load_user_config())[0]) != account:
         print(
             f"claude-sync: {new} belongs to account {to or 'default'}, but its sessions stay in "
-            f"{account}'s {claude_dir()}",
+            f"{claude_dir()}; to move them: claude-sync split {new}",
             file=sys.stderr,
         )
     if os.path.lexists(old):
@@ -1264,6 +1266,202 @@ def cmd_mv(args) -> None:
         os.close(local_lock)
 
 
+# -------------------------------------------------------------------- split
+
+SESSION_DIRS = ("file-history", "session-env", "todos")  # entries named by session uuid
+
+
+def project_cwd(d: Path) -> str | None:
+    """The directory whose sessions a project dir holds, or None if they don't say or
+    disagree (two directories whose names encode the same)."""
+    cwds = {first_cwd(t) for t in d.glob("*.jsonl") if not t.is_symlink()} - {None}
+    return cwds.pop() if len(cwds) == 1 else None
+
+
+def move_entry(src: Path, dst: Path, dry_run: bool) -> None:
+    """Move src to dst, merging into a dir that exists there entry by entry. A file at
+    both is fine if it is the same; otherwise stop, before anything moves if this ran
+    with dry_run first."""
+    if not src.exists() and not src.is_symlink():
+        return
+    if src.is_dir() and not src.is_symlink() and dst.is_dir() and not dst.is_symlink():
+        for child in sorted(src.iterdir()):
+            move_entry(child, dst / child.name, dry_run)
+        if not dry_run:
+            src.rmdir()
+        return
+    if dst.exists() or dst.is_symlink():
+        same = src.is_file() and dst.is_file() and file_hash(src) == file_hash(dst)
+        if not same:
+            sys.exit(f"claude-sync: {dst} already exists and differs from {src}")
+        if not dry_run:
+            src.unlink()
+        return
+    if not dry_run:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(src, dst)
+
+
+def take_history(text: str, cwds: set[str], taken: list[str]) -> str:
+    """history.jsonl without the prompts of cwds; those are added to taken."""
+    kept = []
+    for line in jsonl_lines(text):
+        try:
+            project = json.loads(line).get("project")
+        except (json.JSONDecodeError, AttributeError):
+            project = None
+        (taken if project in cwds else kept).append(line)
+    return "".join(kept)
+
+
+def dump_config(config: dict, text: str) -> str:
+    # Claude writes it as JSON.stringify(config, null, 2) does.
+    return json.dumps(config, indent=2, ensure_ascii=False) + text[len(text.rstrip()) :]
+
+
+def take_config(text: str, cwds: set[str], taken: dict) -> str:
+    """.claude.json without the project settings and GitHub repo paths of cwds; those
+    are put in taken as {"projects": {...}, "githubRepoPaths": {...}}."""
+    config = json.loads(text)
+    projects = config.get("projects") or {}
+    taken["projects"] = {cwd: projects.pop(cwd) for cwd in sorted(cwds & projects.keys())}
+    taken["githubRepoPaths"] = {}
+    for repo, paths in (config.get("githubRepoPaths") or {}).items():
+        if ours := [p for p in paths if p in cwds]:
+            taken["githubRepoPaths"][repo] = ours
+            paths[:] = [p for p in paths if p not in cwds]
+    if not taken["projects"] and not taken["githubRepoPaths"]:
+        return text
+    return dump_config(config, text)
+
+
+def give_config(text: str, taken: dict) -> str:
+    """.claude.json with taken's settings added; settings it already has are kept."""
+    config = json.loads(text)
+    projects = config.setdefault("projects", {})
+    for cwd, settings in taken["projects"].items():
+        if cwd in projects:
+            print(f"claude-sync: {cwd} already has settings there; kept those", file=sys.stderr)
+        else:
+            projects[cwd] = settings
+    repos = config.setdefault("githubRepoPaths", {})
+    for repo, paths in taken["githubRepoPaths"].items():
+        repos[repo] = list(dict.fromkeys([*repos.get(repo, []), *paths]))
+    return dump_config(config, text)
+
+
+def move_records(src: Path, dst: Path, cwds: set[str], dry_run: bool) -> None:
+    """Move the history.jsonl prompts and .claude.json settings of cwds from the
+    Claude dir src to dst. Each goes to dst before it leaves src: a failure in
+    between leaves it in both, not in neither."""
+    history, taken = src / HISTORY, []
+    if history.exists():
+        take_history(history.read_text(), cwds, taken)
+    if taken:
+        dst_history = dst / HISTORY
+        if not dst_history.exists() and not dry_run:
+            write_file(dst_history, "")
+        if dst_history.exists():
+            rewrite(dst_history, lambda text: merge_history(text, "".join(taken)), dry_run)
+        rewrite(history, lambda text: take_history(text, cwds, []), dry_run)
+        print(f"move      {len(taken)} prompts of {HISTORY}")
+
+    src_json, dst_json, settings = claude_json(src), claude_json(dst), {}
+    if src_json.exists():
+        take_config(src_json.read_text(), cwds, settings)
+    if not (settings.get("projects") or settings.get("githubRepoPaths")):
+        return
+    if not dst_json.exists():
+        print(f"claude-sync: no {dst_json}; project settings left in {src_json}", file=sys.stderr)
+        return
+    rewrite(dst_json, lambda text: give_config(text, settings), dry_run)
+    rewrite(src_json, lambda text: take_config(text, cwds, {}), dry_run)
+    print(f"move      settings of {len(settings['projects'])} projects")
+
+
+def split_plan(args, config: UserConfig, src: Path) -> dict[str, list[tuple[Path, str]]]:
+    """{target account: [(project dir, its cwd), ...]} of the projects to move."""
+    plan = {}
+    if args.dir:
+        d = os.path.abspath(args.dir)
+        to = check_account(args.to, "--to") if args.to else account_of(d, config)[0]
+        for proj, _ in project_moves(d, d):
+            plan.setdefault(to, []).append((proj, project_cwd(proj) or d))
+    else:
+        for proj in sorted((src / "projects").glob("*")):
+            if proj.is_symlink() or not proj.is_dir():
+                continue
+            if (cwd := project_cwd(proj)) is None:
+                print(
+                    f"claude-sync: skipping {proj}: no single cwd says whose it is", file=sys.stderr
+                )
+                continue
+            to = account_of(cwd, config)[0]
+            if account_dir(to, config) != src:
+                plan.setdefault(to, []).append((proj, cwd))
+    return plan
+
+
+def cmd_split(args) -> None:
+    if "CLAUDE_SYNC_DIR" in os.environ:
+        sys.exit("claude-sync: split works on accounts; unset CLAUDE_SYNC_DIR")
+    if args.to and not args.dir:
+        sys.exit("claude-sync: --to needs a directory")
+    config = load_user_config()
+    source = check_account(args.from_, "--from") if args.from_ else config.default
+    select_account(source, "here")
+    src = claude_dir()
+    plan = split_plan(args, config, src)
+    targets = {}
+    for to in plan:
+        select_account(to, "here")
+        targets[to] = claude_dir()
+        if targets[to] == src:
+            sys.exit(f"claude-sync: {args.dir} is already in {source or 'the default'}'s {src}")
+    if not plan:
+        print("nothing to split")
+        return
+
+    cwds = {cwd for moves in plan.values() for _, cwd in moves}
+    open_ = [
+        info
+        for root in (src, *targets.values())
+        for info in live_sessions(root).values()
+        if any(moved(info.get("cwd"), cwd, cwd) for cwd in cwds)
+    ]
+    if open_:
+        sys.exit(
+            "claude-sync: close the sessions running in these projects first:\n"
+            + "\n".join(f"  {describe(info)}" for info in open_)
+        )
+    if not args.dry_run:
+        locks = [lock_local(root) for root in {src, *targets.values()}]
+
+    # Each project's entries and where they go: session data first, then the project
+    # dir, which a rerun after a failure reads the session uuids from again.
+    entries = []
+    for to, moves in plan.items():
+        for proj, cwd in moves:
+            print(f"move      {cwd} -> {to or 'default'} ({targets[to]})")
+            for uuid in sorted(t.stem for t in proj.glob("*.jsonl")):
+                for name in SESSION_DIRS:
+                    for e in sorted((src / name).glob(f"{uuid}*")):
+                        entries.append((e, targets[to] / name / e.name))
+            entries.append((proj, targets[to] / "projects" / proj.name))
+    for e, dst in entries:  # all the checks before the first move
+        move_entry(e, dst, dry_run=True)
+    if not args.dry_run:
+        for e, dst in entries:
+            move_entry(e, dst, dry_run=False)
+
+    for to, moves in plan.items():
+        move_records(src, targets[to], {cwd for _, cwd in moves}, args.dry_run)
+
+    if not args.dry_run:
+        for fd in locks:
+            os.close(fd)
+
+
 def main() -> None:
     if len(sys.argv) >= 2 and sys.argv[1] == "--remote":
         remote_main(sys.argv[2], sys.argv[3])
@@ -1292,6 +1490,16 @@ def main() -> None:
     m.add_argument("--account", help="the account whose records to update (default: old's)")
     m.add_argument("--dry-run", "-n", action="store_true", help="print the plan, change nothing")
     m.set_defaults(func=cmd_mv)
+    p = sub.add_parser("split", help="move projects' sessions to the account they belong to")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("dir", nargs="?", help="this project and the directories inside it")
+    g.add_argument("--all", action="store_true", help="every project, each to its own account")
+    p.add_argument("--to", help="the account to move to (default: dir's)")
+    p.add_argument(
+        "--from", dest="from_", help="the account to move from (default: the default account)"
+    )
+    p.add_argument("--dry-run", "-n", action="store_true", help="print the plan, change nothing")
+    p.set_defaults(func=cmd_split)
 
     args = ap.parse_args()
     args.func(args)

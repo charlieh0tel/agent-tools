@@ -89,7 +89,9 @@ sync(host, scope):
   side. The syncing machine picks the account and sends its name; the peer
   maps the name to a dir with its own config, since which account owns
   `~/.claude` is per machine. Tool state lives inside each account's dir, so
-  each account has its own lock, base and trash.
+  each account has its own lock, base and trash. `split` moves projects between
+  accounts on one machine; run on both, the next syncs see the moved files as
+  deleted from one account and present in the other on both sides.
 - **Deletions** are tracked against the sync base and applied to the other side.
   The deleted file is first moved to `~/.claude/claude-sync/trash/<timestamp>/`,
   and trash older than 30 days is cleared at the start of each sync. A file that

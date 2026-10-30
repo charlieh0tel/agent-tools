@@ -9,6 +9,13 @@ claude-sync \- two-way sync of Claude Code sessions between machines
 .B claude-sync mv
 [\fB\-\-account\fR \fIname\fR] [\fB\-n\fR]
 .I old new
+.br
+.B claude-sync split
+[\fB\-\-to\fR \fIname\fR] [\fB\-\-from\fR \fIname\fR] [\fB\-n\fR]
+.I dir
+.br
+.B claude-sync split \-\-all
+[\fB\-\-from\fR \fIname\fR] [\fB\-n\fR]
 .SH DESCRIPTION
 .B claude-sync
 syncs Claude Code sessions with
@@ -129,6 +136,58 @@ can differ between the machines. The account's dir must exist on both. Without
 a config, everything is in
 .IR ~/.claude ,
 as before.
+.SH SPLITTING ACCOUNTS
+.B claude-sync split
+moves sessions out of one account's Claude dir, by default the default
+account's
+.IR ~/.claude ,
+into another's: what is needed to sort a
+.I ~/.claude
+that held every account before
+.BR claude\-user (1)
+was set up. With
+.IR dir ,
+the sessions of
+.I dir
+and the directories inside it go to
+.IR dir 's
+account, or to the one named with
+.BR \-\-to .
+With
+.BR \-\-all ,
+every project goes to the account its directory belongs to; projects already
+there stay.
+.B \-\-from
+names the account to move out of.
+.PP
+For each project it moves the project directory under
+.I projects
+(transcripts, subagents, tool results, memory), each session's
+.IR file\-history ,
+.I session\-env
+and
+.I todos
+entries, the project's prompts in
+.IR history.jsonl ,
+and its settings and GitHub repo paths in
+.IR .claude.json .
+A project directory the target already has is merged into, file by file; a
+file in both that differs stops the split before anything moves. Settings stay
+where they are if the target account has no
+.I .claude.json
+yet: run Claude Code in it once first. It refuses while a session is running
+in a project being moved, and
+.B \-n
+prints what it would do.
+.PP
+Run it on both machines before the next sync of either account. Run on one
+only, the syncs still move the sessions on the other machine, as deletions from
+one account and new files in the other (a large split needs
+.BR \-\-allow\-deletes ),
+but there the prompts come back to the source account's
+.I history.jsonl
+and the settings stay in its
+.IR .claude.json .
 .SH ENVIRONMENT
 .TP
 .B CLAUDE_SYNC_MACHINE_ID

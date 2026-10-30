@@ -67,6 +67,8 @@ alias claude='claude-user run'
 The settings live in `~/.config/claude-user/config`. See `claude-user(1)`.
 `claude-sync` syncs and moves the sessions of the project's account, and the
 other machine finds that account's directory from its own config.
+`claude-sync split --all` sorts a `~/.claude` that held every account: each
+project's sessions, prompts and settings move to the account it belongs to.
 
 ## Install (Debian/Ubuntu)
 

@@ -682,9 +682,9 @@ class MvTest(unittest.TestCase):
         self.assertEqual(out["projects"], {"/a": {"old": 1}, "/c": {"new": 1}})
 
 
-class AccountTest(unittest.TestCase):
-    """Sync and mv with claude-user accounts. The two sides have their own home, and
-    the account that owns ~/.claude differs between them."""
+class AccountFixture(unittest.TestCase):
+    """Two homes with claude-user accounts; the account that owns ~/.claude differs
+    between them. The project belongs to account personal here."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -729,6 +729,10 @@ class AccountTest(unittest.TestCase):
         )
         self.assertEqual(r.returncode == 0, ok, r.stderr + r.stdout)
         return r.stdout + r.stderr
+
+
+class AccountTest(AccountFixture):
+    """Sync and mv with claude-user accounts."""
 
     def test_sync_maps_the_account_on_each_side(self):
         rel = f"projects/{self.enc}/{U1}.jsonl"
@@ -780,6 +784,156 @@ class AccountTest(unittest.TestCase):
                 self.assertEqual(claude_sync.claude_json(), self.here / ".claude.json")
             with mock.patch.object(claude_sync, "ACCOUNT_DIR", self.here / ".claude-x"):
                 self.assertEqual(claude_sync.claude_json(), self.here / ".claude-x/.claude.json")
+
+
+class SplitTest(AccountFixture):
+    """claude-sync split, from a mixed ~/.claude (account work) into ~/.claude-personal."""
+
+    def setUp(self):
+        super().setUp()
+        self.work, self.personal = self.here / ".claude", self.here / ".claude-personal"
+        self.other_dir = self.here / "work" / "thing"  # not under ~/src: stays in work
+        self.other_dir.mkdir(parents=True)
+        self.proj = self.session(self.project_dir, U1)
+        self.session(self.other_dir, U2)
+        (self.proj / U1 / "subagents").mkdir(parents=True)
+        (self.proj / U1 / "subagents" / "agent-1.jsonl").write_text("{}\n")
+        (self.proj / "memory").mkdir()
+        (self.proj / "memory" / "MEMORY.md").write_text("- note\n")
+        for rel in (
+            f"file-history/{U1}/abc@v1",
+            f"todos/{U1}-agent-{U1}.json",
+            f"file-history/{U2}/x",
+        ):
+            (self.work / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.work / rel).write_text("x\n")
+        (self.work / "session-env" / U1).mkdir(parents=True)
+        history = [
+            {"display": "a", "project": str(self.project_dir), "timestamp": 1},
+            {"display": "b", "project": str(self.other_dir), "timestamp": 2},
+            {"display": "c", "project": str(self.project_dir), "timestamp": 3},
+        ]
+        (self.work / "history.jsonl").write_text("".join(json.dumps(h) + "\n" for h in history))
+        (self.personal / "history.jsonl").write_text(
+            json.dumps({"display": "p", "project": "/p", "timestamp": 2}) + "\n"
+        )
+        self.write_json(
+            self.here / ".claude.json",
+            {
+                "projects": {str(self.project_dir): {"trust": 1}, str(self.other_dir): {}},
+                "githubRepoPaths": {"me/demo": [str(self.project_dir), "/x"]},
+            },
+        )
+        self.write_json(self.personal / ".claude.json", {"numStartups": 1})
+
+    def write_json(self, path: Path, data: dict) -> None:
+        path.write_text(json.dumps(data, indent=2))
+
+    def read_json(self, path: Path) -> dict:
+        return json.loads(path.read_text())
+
+    def session(self, cwd: Path, uuid: str) -> Path:
+        proj = self.work / "projects" / claude_sync.encode(str(cwd))
+        proj.mkdir(parents=True, exist_ok=True)
+        (proj / f"{uuid}.jsonl").write_text(json.dumps({"cwd": str(cwd)}) + "\n")
+        return proj
+
+    def displays(self, root: Path) -> list:
+        return [json.loads(line)["display"] for line in (root / "history.jsonl").open()]
+
+    def assert_split(self) -> None:
+        moved = self.personal / "projects" / self.enc
+        self.assertFalse(self.proj.exists())
+        self.assertEqual((moved / "memory" / "MEMORY.md").read_text(), "- note\n")
+        self.assertTrue((moved / U1 / "subagents" / "agent-1.jsonl").exists())
+        for rel in (
+            f"file-history/{U1}/abc@v1",
+            f"todos/{U1}-agent-{U1}.json",
+            f"session-env/{U1}",
+        ):
+            self.assertTrue((self.personal / rel).exists(), rel)
+            self.assertFalse((self.work / rel).exists(), rel)
+        self.assertTrue((self.work / f"file-history/{U2}/x").exists())
+        self.assertEqual(self.displays(self.work), ["b"])
+        self.assertEqual(self.displays(self.personal), ["a", "p", "c"])
+        work_config = self.read_json(self.here / ".claude.json")
+        self.assertEqual(list(work_config["projects"]), [str(self.other_dir)])
+        self.assertEqual(work_config["githubRepoPaths"], {"me/demo": ["/x"]})
+        personal_config = self.read_json(self.personal / ".claude.json")
+        self.assertEqual(personal_config["projects"], {str(self.project_dir): {"trust": 1}})
+        self.assertEqual(personal_config["githubRepoPaths"], {"me/demo": [str(self.project_dir)]})
+        self.assertEqual(personal_config["numStartups"], 1)
+
+    def test_split_a_project(self):
+        out = self.run_sync("split", str(self.project_dir))
+        self.assertIn(f"move      {self.project_dir} -> personal", out)
+        self.assert_split()
+        self.assertIn("nothing to split", self.run_sync("split", str(self.project_dir)))
+
+    def test_split_all_moves_each_project_to_its_account(self):
+        (self.work / "projects" / "-no-sessions").mkdir()
+        out = self.run_sync("split", "--all")
+        self.assertIn("skipping", out)
+        self.assert_split()
+        self.assertTrue((self.work / "projects" / claude_sync.encode(str(self.other_dir))).is_dir())
+
+    def test_dry_run_changes_nothing(self):
+        before = {p: p.read_bytes() for p in self.here.rglob("*") if p.is_file()}
+        self.assertIn("move", self.run_sync("split", "--all", "-n"))
+        after = {p: p.read_bytes() for p in self.here.rglob("*") if p.is_file()}
+        self.assertEqual(before, after)
+
+    def test_merges_into_a_project_already_in_the_target(self):
+        target = self.personal / "projects" / self.enc
+        target.mkdir(parents=True)
+        (target / f"{U3}.jsonl").write_text("new\n")
+        (target / "memory").mkdir()
+        (target / "memory" / "MEMORY.md").write_text("- note\n")  # the same: fine
+        self.run_sync("split", str(self.project_dir))
+        self.assertTrue((target / f"{U3}.jsonl").exists())
+        self.assertTrue((target / f"{U1}.jsonl").exists())
+
+    def test_a_differing_file_in_the_target_stops_before_moving_anything(self):
+        clash = self.personal / "projects" / self.enc / "memory" / "MEMORY.md"
+        clash.parent.mkdir(parents=True)
+        clash.write_text("- other\n")
+        self.assertIn("differs", self.run_sync("split", str(self.project_dir), ok=False))
+        self.assertTrue((self.proj / f"{U1}.jsonl").exists())
+        self.assertTrue((self.work / f"file-history/{U1}/abc@v1").exists())
+
+    def test_refuses_while_a_session_runs_there(self):
+        pid = os.getpid()
+        record = {"pid": pid, "sessionId": U3, "procStart": proc_start(pid)}
+        record["cwd"] = str(self.project_dir / "sub")
+        (self.personal / "sessions" / f"{pid}.json").write_text(json.dumps(record))
+        self.assertIn("close the sessions", self.run_sync("split", "--all", ok=False))
+        self.assertTrue(self.proj.exists())
+
+    def test_to_and_from(self):
+        self.assertIn(
+            "already in", self.run_sync("split", str(self.project_dir), "--to", "work", ok=False)
+        )
+        self.run_sync("split", str(self.project_dir))
+        self.run_sync("split", str(self.project_dir), "--from", "personal", "--to", "work")
+        self.assertTrue((self.proj / f"{U1}.jsonl").exists())
+        self.assertEqual(self.displays(self.work), ["a", "b", "c"])
+
+    def test_syncs_carry_a_split_made_on_one_machine_only(self):
+        self.run_sync("sync", "@local", "--all", "--account", "work")
+        there_work, there_personal = self.there / ".claude-work", self.there / ".claude"
+        self.assertTrue((there_work / "projects" / self.enc / f"{U1}.jsonl").exists())
+        self.run_sync("split", "--all")
+        self.run_sync("sync", "@local", "--all", "--account", "work")
+        self.run_sync("sync", "@local", "--all", "--account", "personal")
+        self.assertFalse((there_work / "projects" / self.enc).exists())
+        self.assertTrue((there_personal / "projects" / self.enc / f"{U1}.jsonl").exists())
+        self.assertTrue((there_personal / f"file-history/{U1}/abc@v1").exists())
+        self.assertEqual(self.displays(self.work), ["a", "b", "c"])  # back from there
+
+    def test_settings_stay_when_the_target_has_no_claude_json(self):
+        (self.personal / ".claude.json").unlink()
+        self.assertIn("project settings left", self.run_sync("split", str(self.project_dir)))
+        self.assertIn(str(self.project_dir), self.read_json(self.here / ".claude.json")["projects"])
 
 
 if __name__ == "__main__":
