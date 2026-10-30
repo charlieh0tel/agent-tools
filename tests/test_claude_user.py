@@ -200,3 +200,85 @@ def test_run_args():
     assert claude_user.run_args(["-a", "x", "-c"]) == ("x", ["-c"])
     assert claude_user.run_args(["--account=x", "--", "-a"]) == ("x", ["-a"])
     assert claude_user.run_args(["-c", "-a", "x"]) == (None, ["-c", "-a", "x"])
+
+
+def logged_in(path: Path, email: str) -> None:
+    path.write_text(f'{{"oauthAccount": {{"emailAddress": "{email}"}}}}')
+
+
+def session(project: Path, cwd: Path) -> None:
+    project.mkdir(parents=True)
+    (project / "s.jsonl").write_text(f'{{"cwd": "{cwd}"}}\n')
+
+
+def test_diagnose_a_healthy_setup(home, capsys):
+    write_config(home, "default = personal\n[dirs]\n~/src/impulse = work\n")
+    (home / ".claude-work").mkdir()
+    logged_in(home / ".claude.json", "me@home")
+    logged_in(home / ".claude-work" / ".claude.json", "me@work")
+    session(home / ".claude-work" / "projects" / "flux", home / "src" / "impulse" / "flux")
+    claude_user.main(["diagnose"])
+    assert capsys.readouterr().out == (
+        "~/.claude  personal\n"
+        "~/.claude-work  work\n"
+        "  ~/src/impulse/flux  work\n"
+        "\n"
+        "ok        personal  ~/.claude: logged in as me@home\n"
+        "ok        work  ~/.claude-work: logged in as me@work\n"
+    )
+
+
+def test_diagnose_finds_problems(home, capsys):
+    write_config(home, "default = personal\n[dirs]\n~/src/impulse = work\n~/src = lab\n")
+    (home / ".claude-work").mkdir()
+    (home / ".claude-personal" / "skills").mkdir(parents=True)  # init before default
+    (home / ".claude-old" / "projects").mkdir(parents=True)
+    logged_in(home / ".claude.json", "me@work")
+    logged_in(home / ".claude-work" / ".claude.json", "me@work")
+    session(home / ".claude" / "projects" / "flux", home / "src" / "impulse" / "flux")
+    session(home / ".claude" / "projects" / "gone", home / "src" / "gone")
+    (home / ".claude" / "projects" / claude_sync.encode(str(home / "src" / "impulse-old"))).mkdir()
+    (home / ".claude" / "projects" / "-nowhere").mkdir()
+    with pytest.raises(SystemExit):
+        claude_user.main(["diagnose"])
+    assert capsys.readouterr().out.splitlines() == [
+        "~/.claude  personal",
+        "  ? -nowhere          ?  no session says whose it is",
+        "  ~/src/impulse-old   lab  from its name; belongs in ~/.claude-lab",
+        "  ~/src/impulse/flux  work  belongs in ~/.claude-work",
+        "  ~/src/gone          lab  gone; belongs in ~/.claude-lab",
+        "~/.claude-old  (no account)",
+        "~/.claude-personal  (no account)",
+        "~/.claude-work  work",
+        "",
+        "problem   lab  ~/.claude-lab: missing; create it with: claude-user init lab",
+        "ok        personal  ~/.claude: logged in as me@work",
+        "problem   personal  ~/.claude: holds 2 projects of lab; "
+        "move them with: claude-sync split --all",
+        "problem   personal  ~/.claude: holds 1 projects of work; "
+        "move them with: claude-sync split --all",
+        "ok        work  ~/.claude-work: logged in as me@work",
+        "problem   personal, work are all logged in as me@work",
+        "problem   ~/.claude-old: no account uses it; it holds sessions or logins",
+        "problem   ~/.claude-personal: personal is the default account, which uses ~/.claude;"
+        " it holds only settings copied by init",
+    ]
+
+
+def test_diagnose_an_account_that_is_not_logged_in(home, capsys):
+    write_config(home, "[dirs]\n~/src = lab\n")
+    (home / ".claude-lab").mkdir()
+    session(home / ".claude-lab" / "projects" / "home", home)
+    with pytest.raises(SystemExit):
+        claude_user.main(["diagnose"])
+    assert capsys.readouterr().out.splitlines() == [
+        "~/.claude  (unnamed default)",
+        "~/.claude-lab  lab",
+        "  ~  (default)  belongs in ~/.claude",
+        "",
+        "problem   (unnamed default)  ~/.claude: not logged in; log in with: claude, then /login",
+        "problem   lab  ~/.claude-lab: not logged in; "
+        "log in with: claude-user run -a lab, then /login",
+        "problem   lab  ~/.claude-lab: holds 1 projects of the default account; "
+        "move them with: claude-sync split --all --from lab",
+    ]

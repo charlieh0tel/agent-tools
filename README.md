@@ -78,6 +78,7 @@ claude-user add work ~/src/impulse    # ...except this: the longest match wins
 claude-user                           # which account applies here, and why
 claude-user run --resume              # claude as that account
 alias claude='claude-user run'
+claude-user diagnose                  # missing logins, stray dirs, misplaced projects
 ```
 
 The settings live in `~/.config/claude-user/config`. See `claude-user(1)`.

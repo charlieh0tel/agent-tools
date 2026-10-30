@@ -22,6 +22,8 @@ claude-user \- run Claude Code as the account a directory belongs to
 .br
 .B claude-user init
 .I account
+.br
+.B claude-user diagnose
 .SH DESCRIPTION
 .B claude-user
 keeps several Claude Code logins, such as a work and a personal account, apart
@@ -115,6 +117,21 @@ Credentials, sessions and plugins are not copied: log in with
 .I account
 and
 .BR /login .
+.TP
+.B diagnose
+List each config dir here with the account that uses it, and under it the
+directory of each of its projects, the account that directory belongs to, and
+whether it is gone or belongs in another config dir. A project whose sessions
+don't say its directory is matched by name to an existing one. Then check the
+setup and print a line for each finding: whether each account's
+config dir exists, which login it has, whether two accounts share a login,
+which projects are in the config dir of an account other than the one they
+belong to, and which
+.I ~/.claude\-name
+dirs no account uses, such as one made by
+.B init
+before that account was made the default. Each problem names the command that
+fixes it. Exits 1 if there is a problem.
 .SH FILES
 .TP
 .I ~/.config/claude\-user/config

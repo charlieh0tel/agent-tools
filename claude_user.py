@@ -7,6 +7,7 @@ account is set in ~/.config/claude-user/config.
 """
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -14,13 +15,16 @@ from collections.abc import Callable
 from pathlib import Path
 
 from claude_sync import (
+    ACCOUNT,
     CONFIG,
     account_dir,
     account_of,
     check_account,
     check_account_dir,
     claude_exe,
+    claude_json,
     load_user_config,
+    project_home,
     resolve_dir,
     user_config_path,
     write_file,
@@ -161,6 +165,126 @@ def cmd_init(args) -> None:
     print(f"created   {tilde(dest)}; log in with: claude-user run -a {account}, then /login")
 
 
+def login(d: Path) -> str | None:
+    """The account Claude in config dir d is logged in as, or None if it isn't."""
+    try:
+        account = json.loads(claude_json(d).read_text()).get("oauthAccount") or {}
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as e:
+        sys.exit(f"claude-user: can't read {tilde(claude_json(d))}: {e}")
+    email, org = account.get("emailAddress"), account.get("organizationName")
+    return f"{email} ({org})" if email and org else email
+
+
+def stray_dirs(config) -> list[Path]:
+    """~/.claude-NAME dirs that are no account's config dir under this config."""
+    used = {account_dir(a, config) for a in {config.default, *config.dirs.values()}}
+    return sorted(
+        d
+        for d in Path.home().glob(".claude-*")
+        if d.is_dir() and ACCOUNT.fullmatch(d.name[len(".claude-") :]) and d not in used
+    )
+
+
+def held_projects(d: Path) -> list[tuple[Path, str | None, bool]]:
+    """Config dir d's project dirs, each with the directory it is for and whether that
+    was found by its name alone; the directory is None if nothing tells."""
+    return [
+        (proj, *project_home(proj))
+        for proj in sorted((d / "projects").glob("*"))
+        if proj.is_dir() and not proj.is_symlink()
+    ]
+
+
+def claude_dirs(config) -> list[Path]:
+    """The config dirs here: the accounts' that exist and the stray ones."""
+    accounts = {account_dir(a, config) for a in {None, config.default, *config.dirs.values()}}
+    return sorted({d for d in accounts if d.is_dir()} | set(stray_dirs(config)))
+
+
+def inventory(config, held: dict[Path, list]) -> list[str]:
+    """For each config dir, the directories of its projects and the account each
+    belongs to, marking those that belong in another config dir."""
+    owners = {account_dir(a, config): a for a in config.dirs.values()}
+    owners[account_dir(None, config)] = config.default or "(unnamed default)"
+    out = []
+    for d, projects in held.items():
+        out.append(f"{tilde(d)}  {owners.get(d, '(no account)')}")
+        rows = []
+        for proj, cwd, by_name in projects:
+            if cwd is None:
+                rows.append((f"? {proj.name}", "?", "no session says whose it is"))
+                continue
+            to = account_of(cwd, config)[0]
+            notes = ["from its name"] if by_name else []
+            notes += [] if os.path.isdir(cwd) else ["gone"]
+            if (should := account_dir(to, config)) != d:
+                notes.append(f"belongs in {tilde(should)}")
+            rows.append((tilde(cwd), to or "(default)", "; ".join(notes)))
+        width = max((len(where) for where, _, _ in rows), default=0)
+        out += [f"  {where:<{width}}  {to}  {note}".rstrip() for where, to, note in rows]
+    return out
+
+
+def diagnose(config, held: dict[Path, list]) -> list[tuple[bool, str]]:
+    """(ok, message) for each account's config dir, login and projects, and for each
+    ~/.claude-NAME dir no account uses."""
+    out, logins = [], {}
+    for account in sorted({config.default, *config.dirs.values()}, key=lambda a: a or ""):
+        d = account_dir(account, config)
+        name = f"{account or '(unnamed default)'}  {tilde(d)}"
+        if not d.is_dir():
+            out.append((False, f"{name}: missing; create it with: claude-user init {account}"))
+            continue
+        if who := login(d):
+            out.append((True, f"{name}: logged in as {who}"))
+            logins.setdefault(who, []).append(account or "default")
+        else:
+            how = f"claude-user run -a {account}" if account else "claude"
+            out.append((False, f"{name}: not logged in; log in with: {how}, then /login"))
+        counts = {}
+        for _, cwd, _ in held.get(d, []):
+            if cwd is not None and account_dir(to := account_of(cwd, config)[0], config) != d:
+                counts[to] = counts.get(to, 0) + 1
+        split = "claude-sync split --all" + (
+            f" --from {account}" if account != config.default else ""
+        )
+        for to, n in sorted(counts.items(), key=lambda item: item[0] or ""):
+            whose = to or "the default account"
+            out.append((False, f"{name}: holds {n} projects of {whose}; move them with: {split}"))
+    for who, accounts in logins.items():
+        if len(accounts) > 1:
+            out.append((False, f"{', '.join(accounts)} are all logged in as {who}"))
+    for d in stray_dirs(config):
+        name = d.name[len(".claude-") :]
+        why = (
+            f"{name} is the default account, which uses ~/.claude"
+            if name == config.default
+            else "no account uses it"
+        )
+        extra = {p.name for p in d.iterdir()} - set(CONFIG)
+        what = "holds only settings copied by init" if not extra else "holds sessions or logins"
+        out.append((False, f"{tilde(d)}: {why}; it {what}"))
+    if ENV in os.environ:
+        out.append((True, f"{ENV}={os.environ[ENV]} is set; run uses it without -a"))
+    return out
+
+
+def cmd_diagnose(args) -> None:
+    config = load_user_config()
+    held = {d: held_projects(d) for d in claude_dirs(config)}
+    for line in inventory(config, held):
+        print(line)
+    findings = diagnose(config, held)
+    if findings:
+        print()
+    for ok, message in findings:
+        print(f"{'ok' if ok else 'problem':<9} {message}")
+    if not all(ok for ok, _ in findings):
+        sys.exit(1)
+
+
 def run_args(argv: list[str]) -> tuple[str | None, list[str]]:
     """Split run's own -a/--account option from the arguments for claude. argparse
     can't: it rejects the options it doesn't know, which here are claude's."""
@@ -235,6 +359,8 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("init", help="create an account's config dir")
     p.add_argument("account")
     p.set_defaults(func=cmd_init)
+    p = sub.add_parser("diagnose", help="check the accounts' config dirs, logins and projects")
+    p.set_defaults(func=cmd_diagnose)
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["run"]:
         account, rest = run_args(argv[1:])
