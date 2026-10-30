@@ -156,7 +156,10 @@ account, or to the one named with
 With
 .BR \-\-all ,
 every project goes to the account its directory belongs to; projects already
-there stay.
+there stay. A project's directory is the one its transcripts record; for a
+project without any, such as one holding only memory, it is the one existing
+directory whose name the project's encodes to, and the project is skipped if
+there is none or several.
 .B \-\-from
 names the account to move out of.
 .PP

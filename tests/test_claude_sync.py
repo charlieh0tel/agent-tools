@@ -877,6 +877,17 @@ class SplitTest(AccountFixture):
         self.assert_split()
         self.assertTrue((self.work / "projects" / claude_sync.encode(str(self.other_dir))).is_dir())
 
+    def test_split_all_moves_a_memory_only_project_by_its_name(self):
+        notes = self.project_dir.parent / "notes"  # its transcripts cleaned up
+        notes.mkdir()
+        memory = self.work / "projects" / claude_sync.encode(str(notes)) / "memory"
+        memory.mkdir(parents=True)
+        (memory / "MEMORY.md").write_text("- kept\n")
+        self.assertIn(f"move      {notes} -> personal", self.run_sync("split", "--all"))
+        moved = self.personal / "projects" / claude_sync.encode(str(notes)) / "memory"
+        self.assertEqual((moved / "MEMORY.md").read_text(), "- kept\n")
+        self.assertFalse(memory.exists())
+
     def test_dry_run_changes_nothing(self):
         before = {p: p.read_bytes() for p in self.here.rglob("*") if p.is_file()}
         self.assertIn("move", self.run_sync("split", "--all", "-n"))

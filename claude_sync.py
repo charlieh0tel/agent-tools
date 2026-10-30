@@ -1278,6 +1278,36 @@ def project_cwd(d: Path) -> str | None:
     return cwds.pop() if len(cwds) == 1 else None
 
 
+def dirs_named(name: str) -> list[str]:
+    """The existing directories whose project dir is called name."""
+    found, todo = [], ["/"]
+    while todo:
+        d = todo.pop()
+        if encode(d) == name:
+            found.append(d)
+            continue
+        try:
+            children = sorted(os.listdir(d))
+        except OSError as e:
+            print(f"claude-sync: can't look in {d}: {e.strerror}", file=sys.stderr)
+            continue
+        for child in children:
+            path = os.path.join(d, child)
+            if name.startswith(encode(path)) and os.path.isdir(path):
+                todo.append(path)
+    return sorted(found)
+
+
+def project_home(proj: Path) -> tuple[str | None, bool]:
+    """The directory project dir proj is for, and whether it was found by proj's name
+    alone: when its sessions don't say, as when it holds only memory, the one existing
+    directory whose name encodes to proj's. None if neither tells."""
+    if (cwd := project_cwd(proj)) is not None:
+        return cwd, False
+    named = dirs_named(proj.name)
+    return (named[0], True) if len(named) == 1 else (None, False)
+
+
 def move_entry(src: Path, dst: Path, dry_run: bool) -> None:
     """Move src to dst, merging into a dir that exists there entry by entry. A file at
     both is fine if it is the same; otherwise stop, before anything moves if this ran
@@ -1391,9 +1421,11 @@ def split_plan(args, config: UserConfig, src: Path) -> dict[str, list[tuple[Path
         for proj in sorted((src / "projects").glob("*")):
             if proj.is_symlink() or not proj.is_dir():
                 continue
-            if (cwd := project_cwd(proj)) is None:
+            if (cwd := project_home(proj)[0]) is None:
                 print(
-                    f"claude-sync: skipping {proj}: no single cwd says whose it is", file=sys.stderr
+                    f"claude-sync: skipping {proj}: neither its sessions nor its name "
+                    "say whose it is",
+                    file=sys.stderr,
                 )
                 continue
             to = account_of(cwd, config)[0]
