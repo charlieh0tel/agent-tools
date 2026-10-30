@@ -1,3 +1,11 @@
+agent-tools (1.4.1) unstable; urgency=medium
+
+  * claude-sync, claude-user: a project with no transcripts whose
+    directory is gone is found from history.jsonl, so split --all moves
+    it and diagnose shows it.
+
+ -- Christopher Hoover <ch@murgatroid.com>  Thu, 29 Oct 2026 20:47:43 -0700
+
 agent-tools (1.4.0) unstable; urgency=medium
 
   * claude-user: add diagnose, which lists each config dir's projects
