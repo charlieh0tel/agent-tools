@@ -1,5 +1,21 @@
 # agent-tools
 
+## agent-install
+
+Prints the command that installs a coding agent's native build with its
+vendor's installer, for you to read and pipe to `sh`. The installer is run so
+it leaves `~/.bashrc` and friends alone: Codex's would otherwise append a PATH
+block, so it gets a throwaway `HOME` for that edit.
+
+```
+agent-install codex            # print the command
+agent-install codex | sh       # run it
+agent-install claude 2.1.310   # a given version (claude, codex)
+agent-install agy              # Antigravity CLI, Google's successor to Gemini CLI
+```
+
+All three install into `~/.local/bin`, which must be on your PATH.
+
 ## agent-ps
 
 Lists running Claude Code and Codex agents with pid, status, tty, tmux pane

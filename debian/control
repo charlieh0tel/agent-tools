@@ -12,6 +12,10 @@ Architecture: all
 Depends: ${misc:Depends}, python3 (>= 3.10), procps, rsync (>= 3.2.3), openssh-client
 Recommends: tmux
 Description: Small tools for working with coding agents
+ agent-install prints the command that installs Claude Code, Codex or
+ Antigravity CLI from its vendor's native installer, set up so the
+ installer leaves shell startup files alone.
+ .
  agent-ps lists running Claude Code and Codex processes with their
  working directory, age, tty and tmux pane. Detection is process-based
  (ps and /proc), and Claude rows are enriched from the per-session

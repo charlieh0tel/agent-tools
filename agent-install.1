@@ -1,0 +1,85 @@
+.TH AGENT-INSTALL 1 "2026-10-29" "agent-tools" "User Commands"
+.SH NAME
+agent-install \- print the command that installs a coding agent
+.SH SYNOPSIS
+.B agent-install
+.BR claude | codex | agy
+[\fIversion\fR]
+.SH DESCRIPTION
+.B agent-install
+prints a command that downloads a coding agent's native installer from its
+vendor and runs it, for you to read and then run with
+.BR "agent-install ... | sh" .
+It runs nothing itself.
+.PP
+The installer is run so that it leaves shell startup files such as
+.I ~/.bashrc
+alone, and with
+.I ~/.local/bin
+on its
+.BR PATH ,
+where all three install. Add that directory to your
+.B PATH
+yourself if it isn't already.
+.TP
+.B claude
+Claude Code, from
+.IR https://claude.ai/install.sh .
+It only suggests the
+.B PATH
+line, which
+.I ~/.local/bin
+on its
+.B PATH
+silences.
+.I version
+is
+.BR stable ,
+.B latest
+or a version number.
+.TP
+.B codex
+Codex, from
+.IR https://chatgpt.com/codex/install.sh .
+It appends a
+.B PATH
+block to
+.I ~/.bashrc
+or
+.I ~/.zshrc
+unless its bin dir is on
+.B PATH
+and no other
+.B codex
+is found, so it runs with a throwaway
+.B HOME
+from
+.BR mktemp (1)
+and with
+.B CODEX_INSTALL_DIR
+and
+.B CODEX_HOME
+set to the real
+.I ~/.local/bin
+and
+.B $CODEX_HOME
+or
+.IR ~/.codex .
+.B CODEX_NON_INTERACTIVE
+keeps it from offering to start Codex or uninstall another one.
+.I version
+is
+.B latest
+or a version number.
+.TP
+.B agy
+Antigravity CLI, Google's successor to Gemini CLI, from
+.IR https://antigravity.google/cli/install.sh .
+It only suggests the
+.B PATH
+line. It installs only the latest version, and does nothing if
+.I ~/.local/bin/agy
+exists: agy updates itself.
+.SH SEE ALSO
+.BR agent\-ps (1),
+.BR claude\-user (1)
