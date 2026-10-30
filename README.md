@@ -47,6 +47,25 @@ both originals kept as `.conflict-*` copies. Sessions open on the receiving
 side are skipped. See `claude-sync(1)` and
 [docs/claude-sync-plan.md](docs/claude-sync-plan.md) for the rules.
 
+## claude-user
+
+Runs Claude Code as the account a directory belongs to, so work and personal
+logins, sessions and history stay apart. Each account has its own config dir
+(`CLAUDE_CONFIG_DIR`): `~/.claude` for this machine's default account,
+`~/.claude-NAME` for the others.
+
+```
+claude-user default work              # ~/.claude is the work account here
+claude-user init personal             # create ~/.claude-personal with its settings
+claude-user add ~/src personal        # ~/src and everything in it is personal...
+claude-user add ~/src/impulse work    # ...except this: the longest match wins
+claude-user                           # which account applies here, and why
+claude-user run --resume              # claude as that account
+alias claude='claude-user run'
+```
+
+The settings live in `~/.config/claude-user/config`. See `claude-user(1)`.
+
 ## Install (Debian/Ubuntu)
 
 Packaged in [charlieh0tel/apt-repo](https://github.com/charlieh0tel/apt-repo):

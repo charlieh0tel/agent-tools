@@ -8,7 +8,7 @@
 # The scripts live side by side in /usr/lib/agent-tools, so one can import
 # another; Python follows the /usr/bin symlinks (debian/agent-tools.links) there.
 override_dh_auto_install:
-	install -D -m 0755 -t debian/agent-tools/usr/lib/agent-tools agent_ps.py claude_sync.py
+	install -D -m 0755 -t debian/agent-tools/usr/lib/agent-tools agent_ps.py claude_sync.py claude_user.py
 
 override_dh_auto_test:
 	python3 -m pytest tests

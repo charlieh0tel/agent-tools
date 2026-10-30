@@ -1,0 +1,147 @@
+.TH CLAUDE-USER 1 "2026-10-29" "agent-tools" "User Commands"
+.SH NAME
+claude-user \- run Claude Code as the account a directory belongs to
+.SH SYNOPSIS
+.B claude-user
+[\fBshow\fR [\fIDIR\fR]]
+.br
+.B claude-user run
+[\fB\-a\fR \fIaccount\fR] [\fB\-\-\fR] [\fIclaude-args\fR ...]
+.br
+.B claude-user list
+.br
+.B claude-user add
+.I dir account
+.br
+.B claude-user rm
+.I dir
+.br
+.B claude-user default
+[\fIaccount\fR]
+.br
+.B claude-user init
+.I account
+.SH DESCRIPTION
+.B claude-user
+keeps several Claude Code logins, such as a work and a personal account, apart
+on one machine. Each account has its own config dir, which Claude Code is
+pointed at with
+.BR CLAUDE_CONFIG_DIR :
+credentials, settings, sessions, prompt history and memory all live there.
+The default account uses
+.I ~/.claude
+and
+.IR ~/.claude.json ,
+as Claude Code does with no
+.B CLAUDE_CONFIG_DIR
+set; any other account
+.I name
+uses
+.IR ~/.claude\-name .
+.PP
+Which account a directory belongs to is set per machine in the config file:
+a directory belongs to the account of the longest configured directory that
+contains it, matched on whole path components, and to the default account if
+none does. Directories are resolved through symlinks before matching.
+.SH COMMANDS
+.TP
+.BR show " [\fIDIR\fR]"
+Print the account
+.I DIR
+(default: the current directory) belongs to, its config dir, and the
+configured directory that decided it. This is the default command.
+.TP
+.B run
+Run
+.B claude
+with the remaining arguments as the account of the current directory, or as
+.I account
+with
+.BR \-a .
+For the default account
+.B CLAUDE_CONFIG_DIR
+is removed from the environment; for any other it is set to the account's
+config dir, which must exist. A
+.B CLAUDE_CONFIG_DIR
+already set is kept unless
+.B \-a
+is given. Its own options must come first; everything after them, or after
+.BR \-\- ,
+goes to
+.BR claude .
+To use it for every session:
+.B alias claude='claude-user run'
+.TP
+.B list
+Print the default account and each configured directory with its account.
+.TP
+.BI add " dir account"
+Make
+.I dir
+and everything in it belong to
+.IR account ,
+replacing any entry for
+.IR dir .
+.I dir
+must be below
+.IR ~ :
+set the default account for
+.I ~
+itself.
+.TP
+.BI rm " dir"
+Remove the entry for
+.IR dir .
+.TP
+.BR default " [\fIaccount\fR]"
+Print, or set, the account that owns
+.I ~/.claude
+on this machine. Which one does can differ between machines.
+.TP
+.BI init " account"
+Create
+.I ~/.claude\-account
+and copy
+.IR CLAUDE.md ,
+.IR settings.json ,
+.I keybindings.json
+and
+.I skills/
+into it from
+.IR ~/.claude .
+Credentials, sessions and plugins are not copied: log in with
+.B claude-user run \-a
+.I account
+and
+.BR /login .
+.SH FILES
+.TP
+.I ~/.config/claude\-user/config
+Lines of
+.BI default " = account"
+followed by
+.BI dir " = account"
+lines under a
+.B [dirs]
+header;
+.B #
+starts a comment. For example:
+.PP
+.RS
+.nf
+default = work
+
+[dirs]
+~/src = personal
+~/src/impulse = work
+.fi
+.RE
+.SH ENVIRONMENT
+.TP
+.B CLAUDE_USER_CONFIG
+Use this config file instead.
+.TP
+.B XDG_CONFIG_HOME
+Where the config file lives, if set.
+.SH SEE ALSO
+.BR claude\-sync (1)

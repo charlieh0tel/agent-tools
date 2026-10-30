@@ -1,2 +1,3 @@
 usr/lib/agent-tools/agent_ps.py usr/bin/agent-ps
 usr/lib/agent-tools/claude_sync.py usr/bin/claude-sync
+usr/lib/agent-tools/claude_user.py usr/bin/claude-user

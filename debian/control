@@ -19,3 +19,6 @@ Description: Small tools for working with coding agents
  .
  claude-sync syncs Claude Code sessions between two machines over ssh
  and rsync, so a session can be resumed on either one.
+ .
+ claude-user runs Claude Code as the account (work, personal, ...) that
+ the current directory belongs to, each with its own config dir.

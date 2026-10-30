@@ -19,10 +19,12 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 MACHINE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")  # it names files under state/
+ACCOUNT = re.compile(r"[A-Za-z0-9_-]{1,64}")  # it names ~/.claude-<account>
 CACHE = Path(
     os.environ.get("CLAUDE_SYNC_CACHE", Path.home() / ".cache" / "claude-sync" / "hash-cache.json")
 )
@@ -64,6 +66,93 @@ def check_machine_id(mid, source: str) -> str:
     if not isinstance(mid, str) or not MACHINE_ID.fullmatch(mid):
         sys.exit(f"claude-sync: refusing machine id {mid!r} from {source}")
     return mid
+
+
+# ----------------------------------------------------------------- accounts
+
+
+@dataclass
+class UserConfig:
+    """claude-user's config: the account that owns ~/.claude on this machine (None if
+    unnamed), and the directories, absolute and resolved, that belong to each account."""
+
+    default: str | None
+    dirs: dict[str, str]
+
+
+def user_config_path() -> Path:
+    if override := os.environ.get("CLAUDE_USER_CONFIG"):
+        return Path(override)
+    config_home = os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
+    return Path(config_home) / "claude-user" / "config"
+
+
+def check_account(name, source: str) -> str:
+    if not isinstance(name, str) or not ACCOUNT.fullmatch(name):
+        sys.exit(f"{source}: refusing account name {name!r}")
+    return name
+
+
+def resolve_dir(d: str) -> str:
+    return os.path.realpath(os.path.expanduser(d))
+
+
+def check_account_dir(d: str, source: str) -> str:
+    """Refuse ~ and the directories above it: the default account already covers them,
+    and an entry there would take over every directory without one."""
+    if moved(str(Path.home().resolve()), d, d) or d == "/":
+        sys.exit(f"{source}: {d} is ~ or above it; set the default account instead")
+    return d
+
+
+def parse_user_config(text: str, source: str) -> UserConfig:
+    """Parse lines of `default = NAME`, then `DIR = NAME` under a [dirs] header."""
+    config, section = UserConfig(None, {}), None
+    for n, line in enumerate(text.split("\n"), 1):
+        where, line = f"{source}:{n}", line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip()
+            if section != "dirs":
+                sys.exit(f"{where}: unknown section [{section}]")
+            continue
+        key, sep, value = line.rpartition("=")  # an account name has no '='; a path might
+        key, value = key.strip(), value.strip()
+        if not sep or not key:
+            sys.exit(f"{where}: expected NAME = VALUE")
+        if section == "dirs":
+            d = check_account_dir(resolve_dir(key), where)
+            config.dirs[d] = check_account(value, where)
+        elif key == "default":
+            config.default = check_account(value, where)
+        else:
+            sys.exit(f"{where}: unknown setting {key}")
+    return config
+
+
+def load_user_config() -> UserConfig:
+    path = user_config_path()
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return UserConfig(None, {})
+    return parse_user_config(text, str(path))
+
+
+def account_of(path: str, config: UserConfig) -> tuple[str | None, str | None]:
+    """The account path belongs to, and the configured directory that decided it: the
+    longest one containing path, or None when it falls to the default account."""
+    path = os.path.realpath(path)
+    best = max((d for d in config.dirs if moved(path, d, d)), key=len, default=None)
+    return (config.dirs[best], best) if best else (config.default, None)
+
+
+def account_dir(account: str | None, config: UserConfig) -> Path:
+    """An account's Claude config dir: ~/.claude for the default, else ~/.claude-NAME."""
+    if account is None or account == config.default:
+        return Path.home() / ".claude"
+    return Path.home() / f".claude-{account}"
 
 
 # ---------------------------------------------------------------- file kinds
@@ -263,10 +352,13 @@ def live_sessions() -> dict:
     return live
 
 
+def claude_exe() -> str:
+    return shutil.which("claude") or str(Path.home() / ".local" / "bin" / "claude")
+
+
 def claude_version() -> str | None:
-    exe = shutil.which("claude") or str(Path.home() / ".local" / "bin" / "claude")
     try:
-        r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=15)
+        r = subprocess.run([claude_exe(), "--version"], capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return r.stdout.split()[0] if r.returncode == 0 and r.stdout else None
