@@ -1,3 +1,25 @@
+agent-tools (1.3.0) unstable; urgency=medium
+
+  * claude-user (new): run Claude Code as the account (work, personal, ...)
+    a directory belongs to, each with its own CLAUDE_CONFIG_DIR.
+    ~/.config/claude-user/config maps directories to accounts; the longest
+    match wins.
+  * claude-sync: sync and mv work on one account's Claude dir, the
+    project's or --account's; the peer maps the account name with its own
+    config.
+  * claude-sync: add split, which moves projects' sessions, session data,
+    prompts and settings to the account they belong to; split --all sorts
+    a ~/.claude that held every account.
+  * agent-ps: look up sessions in every account's sessions/ and show an
+    ACCOUNT column when any session's account is known.
+  * agent-install (new): print the command that installs Claude Code, Codex
+    or Antigravity CLI from the vendor's native installer, run so it leaves
+    shell startup files alone.
+  * Install the scripts under /usr/lib/agent-tools, with /usr/bin symlinks,
+    so they can import each other.
+
+ -- Christopher Hoover <ch@murgatroid.com>  Thu, 29 Oct 2026 19:16:10 -0700
+
 agent-tools (1.2.0) unstable; urgency=medium
 
   * claude-sync: add mv, which renames a project directory and updates
