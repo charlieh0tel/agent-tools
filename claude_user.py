@@ -174,23 +174,35 @@ def run_args(argv: list[str]) -> tuple[str | None, list[str]]:
     return account, argv
 
 
-def cmd_run(args) -> None:
+def account_env(account: str | None) -> dict[str, str]:
+    """The environment to run claude in as account; None is the account of the cwd,
+    unless CLAUDE_CONFIG_DIR is set, which is then kept."""
     env = dict(os.environ)
-    if args.account or ENV not in env:
-        config = load_user_config()
-        account = check_account(args.account, "claude-user") if args.account else None
-        account = account or account_of(os.getcwd(), config)[0]
-        d = account_dir(account, config)
-        if d == account_dir(None, config):
-            # Set to ~/.claude, Claude would look for .claude.json in it, not in ~.
-            env.pop(ENV, None)
-        elif not d.is_dir():
-            sys.exit(f"claude-user: {tilde(d)} doesn't exist; run claude-user init {account}")
-        else:
-            env[ENV] = str(d)
+    if not account and ENV in env:
+        return env
+    config = load_user_config()
+    account = check_account(account, "claude-user") if account else None
+    account = account or account_of(os.getcwd(), config)[0]
+    d = account_dir(account, config)
+    if d == account_dir(None, config):
+        # Set to ~/.claude, Claude would look for .claude.json in it, not in ~.
+        env.pop(ENV, None)
+    elif not d.is_dir():
+        sys.exit(f"claude-user: {tilde(d)} doesn't exist; run claude-user init {account}")
+    else:
+        env[ENV] = str(d)
+    return env
+
+
+def find_claude() -> str:
     exe = claude_exe()
     if os.path.realpath(exe) == os.path.realpath(sys.argv[0]):
         sys.exit(f"claude-user: {exe} is claude-user itself; can't find claude")
+    return exe
+
+
+def cmd_run(args) -> None:
+    env, exe = account_env(args.account), find_claude()
     try:
         os.execve(exe, ["claude", *args.args], env)
     except OSError as e:
