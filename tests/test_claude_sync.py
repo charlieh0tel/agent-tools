@@ -888,6 +888,16 @@ class SplitTest(AccountFixture):
         self.assertEqual((moved / "MEMORY.md").read_text(), "- kept\n")
         self.assertFalse(memory.exists())
 
+    def test_split_all_finds_a_gone_project_from_history(self):
+        gone = self.project_dir.parent / "renamed-away"
+        memory = self.work / "projects" / claude_sync.encode(str(gone)) / "memory"
+        memory.mkdir(parents=True)
+        with (self.work / "history.jsonl").open("a") as f:
+            f.write(json.dumps({"display": "g", "project": str(gone), "timestamp": 4}) + "\n")
+        self.assertIn(f"move      {gone} -> personal", self.run_sync("split", "--all"))
+        self.assertFalse(memory.exists())
+        self.assertIn("g", self.displays(self.personal))
+
     def test_dry_run_changes_nothing(self):
         before = {p: p.read_bytes() for p in self.here.rglob("*") if p.is_file()}
         self.assertIn("move", self.run_sync("split", "--all", "-n"))

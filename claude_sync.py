@@ -1298,14 +1298,34 @@ def dirs_named(name: str) -> list[str]:
     return sorted(found)
 
 
-def project_home(proj: Path) -> tuple[str | None, bool]:
-    """The directory project dir proj is for, and whether it was found by proj's name
-    alone: when its sessions don't say, as when it holds only memory, the one existing
-    directory whose name encodes to proj's. None if neither tells."""
+def history_dirs(root: Path) -> dict[str, set[str]]:
+    """{project dir name: the directories of the prompts in root's history.jsonl}."""
+    out = {}
+    try:
+        text = (root / HISTORY).read_text()
+    except FileNotFoundError:
+        return out
+    for line in jsonl_lines(text):
+        try:
+            project = json.loads(line).get("project")
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        if isinstance(project, str):
+            out.setdefault(encode(project), set()).add(project)
+    return out
+
+
+def project_home(proj: Path, history: dict[str, set[str]]) -> tuple[str | None, str | None]:
+    """The directory project dir proj is for, and how it was found when its sessions
+    don't say, as when it holds only memory: "from history" if history (history_dirs
+    of its Claude dir) has one directory of that name, else "from its name" if one
+    existing directory has it. None, None if nothing tells."""
     if (cwd := project_cwd(proj)) is not None:
-        return cwd, False
+        return cwd, None
+    if len(known := history.get(proj.name, set())) == 1:
+        return next(iter(known)), "from history"
     named = dirs_named(proj.name)
-    return (named[0], True) if len(named) == 1 else (None, False)
+    return (named[0], "from its name") if len(named) == 1 else (None, None)
 
 
 def move_entry(src: Path, dst: Path, dry_run: bool) -> None:
@@ -1418,15 +1438,12 @@ def split_plan(args, config: UserConfig, src: Path) -> dict[str, list[tuple[Path
         for proj, _ in project_moves(d, d):
             plan.setdefault(to, []).append((proj, project_cwd(proj) or d))
     else:
+        history = history_dirs(src)
         for proj in sorted((src / "projects").glob("*")):
             if proj.is_symlink() or not proj.is_dir():
                 continue
-            if (cwd := project_home(proj)[0]) is None:
-                print(
-                    f"claude-sync: skipping {proj}: neither its sessions nor its name "
-                    "say whose it is",
-                    file=sys.stderr,
-                )
+            if (cwd := project_home(proj, history)[0]) is None:
+                print(f"claude-sync: skipping {proj}: its directory is unknown", file=sys.stderr)
                 continue
             to = account_of(cwd, config)[0]
             if account_dir(to, config) != src:

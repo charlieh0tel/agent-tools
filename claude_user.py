@@ -25,6 +25,7 @@ from claude_sync import (
     check_account_dir,
     claude_exe,
     claude_json,
+    history_dirs,
     load_user_config,
     project_home,
     resolve_dir,
@@ -189,11 +190,12 @@ def stray_dirs(config) -> list[Path]:
     )
 
 
-def held_projects(d: Path) -> list[tuple[Path, str | None, bool]]:
-    """Config dir d's project dirs, each with the directory it is for and whether that
-    was found by its name alone; the directory is None if nothing tells."""
+def held_projects(d: Path) -> list[tuple[Path, str | None, str | None]]:
+    """Config dir d's project dirs, each with the directory it is for and how that was
+    found if not from its sessions (see project_home)."""
+    history = history_dirs(d)
     return [
-        (proj, *project_home(proj))
+        (proj, *project_home(proj, history))
         for proj in sorted((d / "projects").glob("*"))
         if proj.is_dir() and not proj.is_symlink()
     ]
@@ -214,12 +216,12 @@ def inventory(config, held: dict[Path, list]) -> list[str]:
     for d, projects in held.items():
         out.append(f"{tilde(d)}  {owners.get(d, '(no account)')}")
         rows = []
-        for proj, cwd, by_name in projects:
+        for proj, cwd, found in projects:
             if cwd is None:
-                rows.append((f"? {proj.name}", "?", "no session says whose it is"))
+                rows.append((f"? {proj.name}", "?", "directory unknown"))
                 continue
             to = account_of(cwd, config)[0]
-            notes = ["from its name"] if by_name else []
+            notes = [found] if found else []
             notes += [] if os.path.isdir(cwd) else ["gone"]
             if (should := account_dir(to, config)) != d:
                 notes.append(f"belongs in {tilde(should)}")

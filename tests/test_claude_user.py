@@ -244,7 +244,7 @@ def test_diagnose_finds_problems(home, capsys):
         claude_user.main(["diagnose"])
     assert capsys.readouterr().out.splitlines() == [
         "~/.claude  personal",
-        "  ? -nowhere          ?  no session says whose it is",
+        "  ? -nowhere          ?  directory unknown",
         "  ~/src/impulse-old   lab  from its name; belongs in ~/.claude-lab",
         "  ~/src/impulse/flux  work  belongs in ~/.claude-work",
         "  ~/src/gone          lab  gone; belongs in ~/.claude-lab",
@@ -305,3 +305,12 @@ def test_login_runs_in_an_empty_temporary_dir(home, monkeypatch):
     assert not os.path.exists(cwd)
     with pytest.raises(SystemExit, match="claude-user init lab"):
         claude_user.main(["login", "lab"])
+
+
+def test_diagnose_finds_a_memory_only_project_from_history(home, capsys):
+    gone = home / "src" / "old-name"
+    (home / ".claude" / "projects" / claude_sync.encode(str(gone)) / "memory").mkdir(parents=True)
+    (home / ".claude" / "history.jsonl").write_text(f'{{"project": "{gone}"}}\n')
+    with pytest.raises(SystemExit):
+        claude_user.main(["diagnose"])
+    assert "  ~/src/old-name  (default)  from history; gone" in capsys.readouterr().out

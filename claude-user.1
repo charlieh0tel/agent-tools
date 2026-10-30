@@ -135,7 +135,11 @@ status.
 List each config dir here with the account that uses it, and under it the
 directory of each of its projects, the account that directory belongs to, and
 whether it is gone or belongs in another config dir. A project whose sessions
-don't say its directory is matched by name to an existing one. Then check the
+don't say its directory is matched by name to one in
+.I history.jsonl
+or to an existing one, as
+.BR "claude\-sync split \-\-all" " does."
+Then check the
 setup and print a line for each finding: whether each account's
 config dir exists, which login it has, whether two accounts share a login,
 which projects are in the config dir of an account other than the one they
