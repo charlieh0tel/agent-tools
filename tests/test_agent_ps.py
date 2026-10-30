@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import agent_ps
 from agent_ps import (
     Proc,
@@ -14,6 +16,12 @@ from agent_ps import (
     tmux_target,
     truncate,
 )
+
+
+@pytest.fixture(autouse=True)
+def no_user_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_USER_CONFIG", str(tmp_path / "no-config"))
+
 
 CODEX_BIN = (
     "/home/u/.nvm/versions/node/v22/lib/node_modules/@openai/codex/node_modules/"
@@ -105,6 +113,31 @@ def test_claude_session_info_rejects_non_object_json(monkeypatch, tmp_path, caps
         "claude_tmux_id": "s:@0.%0",
     }
     assert capsys.readouterr().err.count("warning:") == 3
+
+
+def test_claude_session_info_names_the_account(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent_ps, "HOME", tmp_path)
+    for d, pid in ((".claude", 1), (".claude-personal", 2)):
+        (tmp_path / d / "sessions").mkdir(parents=True)
+        (tmp_path / d / "sessions" / f"{pid}.json").write_text(f'{{"pid": {pid}, "name": "s"}}')
+    assert agent_ps.claude_session_info(1) == {"name": "s"}
+    assert agent_ps.claude_session_info(2) == {"name": "s", "account": "personal"}
+    (tmp_path / "config").write_text("default = work\n")
+    monkeypatch.setenv("CLAUDE_USER_CONFIG", str(tmp_path / "config"))
+    assert agent_ps.claude_session_info(1) == {"name": "s", "account": "work"}
+
+
+def test_format_table_shows_accounts_when_known(monkeypatch):
+    monkeypatch.setattr(agent_ps, "HOME", type("P", (), {"__str__": lambda self: "/work"})())
+
+    def session(pid):
+        return {**fake_session(pid), "account": "personal"} if pid == 100 else {}
+
+    agents = collect(sample_procs(), cwd_of=fake_cwd, session_info=session, panes=PANES)
+    out = format_table(agents).splitlines()
+    assert out[0].split()[:3] == ["AGENT", "ACCOUNT", "PID"]
+    assert out[1].split()[:3] == ["claude", "personal", "100"]
+    assert out[2].split()[:3] == ["codex", "-", "200"]
 
 
 def test_classify_ignores_shells_and_unrelated():

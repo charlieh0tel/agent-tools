@@ -2,7 +2,8 @@
 """List running coding agents (Claude Code, Codex) and their working directories.
 
 Detection is process-based (ps plus /proc on Linux, lsof elsewhere). Claude rows are
-enriched from ~/.claude/sessions/<pid>.json when present (name, status, tmux pane).
+enriched from ~/.claude/sessions/<pid>.json when present (name, status, tmux pane), or
+from the sessions/ of a claude-user account's ~/.claude-NAME, which names the account.
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from claude_sync import load_user_config
 
 LINUX = sys.platform.startswith("linux")
 HOME = Path.home()
@@ -212,8 +215,25 @@ def agent_args(kind: str, argv: list[str]) -> str:
     return " ".join(rest)
 
 
+def claude_dirs() -> list[tuple[Path, str | None]]:
+    """Each claude-user account's Claude dir and its name; ~/.claude's is None unless
+    the config names this machine's default account."""
+    named = sorted(d for d in HOME.glob(".claude-*") if d.is_dir())
+    return [
+        (HOME / ".claude", load_user_config().default),
+        *((d, d.name.removeprefix(".claude-")) for d in named),
+    ]
+
+
 def claude_session_info(pid: int) -> dict[str, Any]:
-    path = HOME / ".claude" / "sessions" / f"{pid}.json"
+    found = (
+        (path, account)
+        for d, account in claude_dirs()
+        if (path := d / "sessions" / f"{pid}.json").exists()
+    )
+    path, account = next(found, (None, None))
+    if path is None:
+        return {}
     try:
         data = json.loads(path.read_text())
     except FileNotFoundError:
@@ -227,6 +247,8 @@ def claude_session_info(pid: int) -> dict[str, Any]:
     if data.get("pid") not in (None, pid):
         return {}
     info = {k: data[k] for k in CLAUDE_SESSION_FIELDS if data.get(k) is not None}
+    if account is not None:
+        info["account"] = account
     if data.get("kind") is not None:
         info["session_kind"] = data["kind"]
     if data.get("tmux") is not None:
@@ -350,6 +372,7 @@ def format_table(agents: list[Agent], width: int | None = None) -> str:
         rows.append(
             [
                 a.kind,
+                str(a.extra.get("account") or "-"),
                 str(a.pid),
                 status,
                 human_age(a.age_s),
@@ -359,6 +382,10 @@ def format_table(agents: list[Agent], width: int | None = None) -> str:
                 " ".join(info),
             ]
         )
+    if any(a.extra.get("account") for a in agents):
+        header.insert(1, "ACCOUNT")
+    else:
+        rows = [[r[0], *r[2:]] for r in rows]
     widths = [max(len(r[i]) for r in [header, *rows]) for i in range(len(header) - 1)]
     fmt = "  ".join(f"{{:<{w}}}" for w in widths) + "  {}"
     info_width = width - (sum(widths) + 2 * len(widths)) if width is not None else 0
