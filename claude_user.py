@@ -117,16 +117,18 @@ def cmd_list(args) -> None:
 
 
 def cmd_add(args) -> None:
-    d = config_dir_arg(args.dir)
     account = check_account(args.account, "claude-user")
-    edit_config("dirs", lambda key: resolve_dir(key) == d, f"{tilde(d)} = {account}")
+    for d in [config_dir_arg(d) for d in args.dirs]:  # all checked before any is added
+        edit_config("dirs", lambda key, d=d: resolve_dir(key) == d, f"{tilde(d)} = {account}")
 
 
 def cmd_rm(args) -> None:
-    d = config_dir_arg(args.dir)
-    if d not in load_user_config().dirs:
-        sys.exit(f"claude-user: {tilde(d)} has no entry")
-    edit_config("dirs", lambda key: resolve_dir(key) == d, None)
+    dirs = [config_dir_arg(d) for d in args.dirs]
+    config = load_user_config()
+    if missing := [tilde(d) for d in dirs if d not in config.dirs]:
+        sys.exit(f"claude-user: no entry for {', '.join(missing)}")
+    for d in dirs:
+        edit_config("dirs", lambda key, d=d: resolve_dir(key) == d, None)
 
 
 def cmd_default(args) -> None:
@@ -208,12 +210,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("args", nargs="*", help="arguments for claude")
     p = sub.add_parser("list", help="the default account and the directories of each account")
     p.set_defaults(func=cmd_list)
-    p = sub.add_parser("add", help="make a directory and everything in it belong to an account")
-    p.add_argument("dir")
+    p = sub.add_parser("add", help="make directories and everything in them belong to an account")
     p.add_argument("account")
+    p.add_argument("dirs", nargs="*", default=["."], metavar="dir", help="default: the cwd")
     p.set_defaults(func=cmd_add)
-    p = sub.add_parser("rm", help="remove a directory's entry")
-    p.add_argument("dir")
+    p = sub.add_parser("rm", help="remove directories' entries")
+    p.add_argument("dirs", nargs="*", default=["."], metavar="dir", help="default: the cwd")
     p.set_defaults(func=cmd_rm)
     p = sub.add_parser("default", help="show or set the account that owns ~/.claude here")
     p.add_argument("account", nargs="?")

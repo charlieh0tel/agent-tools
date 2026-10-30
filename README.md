@@ -73,8 +73,8 @@ logins, sessions and history stay apart. Each account has its own config dir
 ```
 claude-user default work              # ~/.claude is the work account here
 claude-user init personal             # create ~/.claude-personal with its settings
-claude-user add ~/src personal        # ~/src and everything in it is personal...
-claude-user add ~/src/impulse work    # ...except this: the longest match wins
+claude-user add personal ~/src        # ~/src and everything in it is personal...
+claude-user add work ~/src/impulse    # ...except this: the longest match wins
 claude-user                           # which account applies here, and why
 claude-user run --resume              # claude as that account
 alias claude='claude-user run'

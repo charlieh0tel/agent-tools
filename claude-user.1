@@ -11,10 +11,11 @@ claude-user \- run Claude Code as the account a directory belongs to
 .B claude-user list
 .br
 .B claude-user add
-.I dir account
+.I account
+[\fIdir\fR ...]
 .br
 .B claude-user rm
-.I dir
+[\fIdir\fR ...]
 .br
 .B claude-user default
 [\fIaccount\fR]
@@ -75,13 +76,12 @@ To use it for every session:
 .B list
 Print the default account and each configured directory with its account.
 .TP
-.BI add " dir account"
-Make
+.BI add " account" " \fR[\fPdir\fR ...]"
+Make each
 .I dir
-and everything in it belong to
+(default: the current directory) and everything in it belong to
 .IR account ,
-replacing any entry for
-.IR dir .
+replacing any entry for it. Each
 .I dir
 must be below
 .IR ~ :
@@ -89,9 +89,10 @@ set the default account for
 .I ~
 itself.
 .TP
-.BI rm " dir"
-Remove the entry for
-.IR dir .
+.BR rm " [\fIdir\fR ...]"
+Remove the entry for each
+.I dir
+(default: the current directory). Nothing is removed if one has no entry.
 .TP
 .BR default " [\fIaccount\fR]"
 Print, or set, the account that owns

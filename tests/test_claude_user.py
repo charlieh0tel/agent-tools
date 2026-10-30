@@ -81,8 +81,8 @@ def test_a_missing_config_is_empty(home):
 
 def test_add_rm_and_default_keep_comments(home):
     write_config(home, "# my accounts\n[dirs]\n# personal stuff\n~/src = personal\n")
-    claude_user.main(["add", str(home / "src" / "impulse"), "work"])
-    claude_user.main(["add", "~/src", "home"])  # replaces the entry for ~/src
+    claude_user.main(["add", "work", str(home / "src" / "impulse")])
+    claude_user.main(["add", "home", "~/src"])  # replaces the entry for ~/src
     claude_user.main(["default", "work"])
     assert config_text(home) == (
         "default = work\n"
@@ -95,14 +95,35 @@ def test_add_rm_and_default_keep_comments(home):
 
 
 def test_add_creates_the_config(home):
-    claude_user.main(["add", "~/src", "personal"])
+    claude_user.main(["add", "personal", "~/src"])
     assert config_text(home) == "[dirs]\n~/src = personal\n"
+
+
+def test_add_and_rm_several_dirs_or_the_cwd(home, monkeypatch):
+    monkeypatch.chdir(home / "src" / "impulse")
+    claude_user.main(["add", "work"])
+    claude_user.main(["add", "personal", "~/src", "~/src/impulse-old"])
+    assert config_text(home) == (
+        "[dirs]\n~/src/impulse = work\n~/src = personal\n~/src/impulse-old = personal\n"
+    )
+    with pytest.raises(SystemExit, match="no entry for ~/src/impulse/flux"):
+        claude_user.main(["rm", "~/src", "~/src/impulse/flux"])
+    assert "~/src = personal" in config_text(home)  # nothing removed
+    claude_user.main(["rm", "~/src", "~/src/impulse-old"])
+    claude_user.main(["rm"])
+    assert config_text(home) == "[dirs]\n"
+
+
+def test_add_checks_every_dir_before_adding_any(home):
+    with pytest.raises(SystemExit):
+        claude_user.main(["add", "personal", "~/src", "~"])
+    assert not (home / ".config" / "claude-user" / "config").exists()
 
 
 @pytest.mark.parametrize("d", ["~", "/", "~/..", "~/src/../.."])
 def test_add_refuses_home_and_above(home, d):
     with pytest.raises(SystemExit):
-        claude_user.main(["add", d, "personal"])
+        claude_user.main(["add", "personal", d])
 
 
 def test_show(home, capsys, monkeypatch):
